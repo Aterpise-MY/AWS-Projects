@@ -1,0 +1,29 @@
+# prod.tfvars.example
+# Copy this file to prod.tfvars, fill in the required values, then run:
+#   terraform plan -var-file=prod.tfvars
+#   terraform apply -var-file=prod.tfvars
+
+project_name         = "scalable-webapp"
+environment          = "prod"
+region               = "us-east-1"
+
+# Required — no defaults
+ami_id               = "ami-XXXXXXXXXXXXXXXXX"  # Amazon Linux 2023 or Ubuntu AMI for your region
+key_pair_name        = "your-key-pair-name"
+alarm_email          = "your@email.com"
+
+# Optional overrides
+instance_type           = "t3.medium"
+vpc_cidr                = "10.0.0.0/16"
+public_subnet_cidrs     = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs    = ["10.0.3.0/24", "10.0.4.0/24"]
+asg_min_size            = 2
+asg_max_size            = 6
+asg_desired_capacity    = 2
+cpu_scale_out_threshold = 70
+cpu_scale_in_threshold  = 30
+web_server              = "nginx"
+
+# Leave empty to skip HTTPS, or set your ACM certificate ARN
+acm_certificate_arn     = ""
+# acm_certificate_arn   = "arn:aws:acm:us-east-1:123456789012:certificate/abc-def"

@@ -1,0 +1,36 @@
+# Terraform state
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Terraform local directory (provider plugins cache)
+.terraform/
+.terraform.lock.hcl
+
+# Variable files (may contain real VPC/subnet IDs and secrets)
+terraform.tfvars
+*.tfvars
+!*.tfvars.example
+
+# Plan output files
+*.tfplan
+*.plan
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files (local-only Terraform overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# SSH private keys
+*.pem
+
+# macOS
+.DS_Store
+variables.tf
+variables.tf
