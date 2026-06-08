@@ -30,23 +30,23 @@ automatically adds or removes instances in response to CPU load.
 
 ```
                            ┌─────────────────────────────────────┐
-                           │              Internet                │
+                           │              Internet               │
                            └──────────────────┬──────────────────┘
                                               │
                            ┌──────────────────▼──────────────────┐
-                           │         Internet Gateway             │
-                           │       igw-076bdd124057cfb98          │
+                           │         Internet Gateway            │
+                           │       igw-076bdd124057cfb98         │
                            └──────────────────┬──────────────────┘
                                               │
                            ┌──────────────────▼──────────────────┐
-                           │    Application Load Balancer (ALB)   │
-                           │    WebAppALB  •  port 80  •  HTTP    │
-                           │    internet-facing, multi-AZ         │
+                           │    Application Load Balancer (ALB)  │
+                           │    WebAppALB  •  port 80  •  HTTP   │
+                           │    internet-facing, multi-AZ        │
                            └──────────┬───────────────┬──────────┘
                                       │               │
                     ┌─────────────────▼──┐       ┌───▼─────────────────┐
-                    │    us-east-1a      │       │    us-east-1b        │
-                    │  10.0.0.0/28       │       │  10.0.0.16/28        │
+                    │    us-east-1a      │       │    us-east-1b       │
+                    │  10.0.0.0/28       │       │  10.0.0.16/28       │
                     │  ┌──────────────┐  │       │  ┌──────────────┐   │
                     │  │  EC2 t3.med  │  │       │  │  EC2 t3.med  │   │
                     │  │  Amazon      │  │       │  │  Amazon      │   │
@@ -61,7 +61,7 @@ automatically adds or removes instances in response to CPU load.
                               Scale in:  CPU < 40%
 
    ┌──────────────────────────────────────────────────────────────────┐
-   │  CloudWatch                                                       │
+   │  CloudWatch                                                      │
    │   • CPUUtilization HIGH alarm  ──►  scale-out policy             │
    │   • CPUUtilization LOW alarm   ──►  scale-in  policy             │
    └──────────────────────────────────────────────────────────────────┘
