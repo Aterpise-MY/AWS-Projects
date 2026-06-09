@@ -1,0 +1,17 @@
+# Generated reports and outputs
+reports/
+*.txt
+*.log
+*.csv
+*.json
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build artifacts
+darwin_arm64/
+linux_x86_64/
+
+# macOS
+.DS_Store

@@ -1,0 +1,56 @@
+# Terraform artifacts
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!terraform.tfvars.example
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Bash deployment script artifacts
+*.log
+deploy_*.json
+
+# SSH keys (if accidentally committed)
+*.pem
+*.pub
+
+# AWS credentials (if accidentally committed)
+.aws/
+~/.aws/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Outputs (capture these from terraform output instead)
+outputs.json
+
+# Deployment and automation outputs
+*_output.log
+apply_output.log
+plan_output.txt
+health_check_output.txt
+
+# Local configuration files
+settings.local.json
+
+# Generated reports and screenshots
+Automation/reports/
+Automation/reports/*.txt
+Automation/reports/*.png
+Automation/reports/*.csv

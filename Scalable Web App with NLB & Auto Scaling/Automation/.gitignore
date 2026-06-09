@@ -1,0 +1,13 @@
+# Generated reports and outputs
+reports/
+*.txt
+*.log
+*.csv
+*.json
+
+# Temporary files
+*.tmp
+*.temp
+
+# macOS
+.DS_Store
