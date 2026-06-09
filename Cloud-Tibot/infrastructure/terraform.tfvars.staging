@@ -1,0 +1,35 @@
+# =============================================================================
+# Project CORTEX — Staging Environment Configuration
+# =============================================================================
+# Used when deploying to the `staging` branch.
+# Lower resource allocation than prod, separate topic IDs if desired.
+# =============================================================================
+
+# AWS Configuration
+aws_region   = "us-east-1"
+project_name = "cortex"
+environment  = "staging"
+
+# Telegram Configuration
+# Use the SAME bot/chat but different topic threads for staging alerts,
+# or use a separate staging Telegram group entirely.
+telegram_token   = "YOUR_STAGING_TELEGRAM_BOT_TOKEN"
+telegram_chat_id = "YOUR_STAGING_TELEGRAM_CHAT_ID"
+
+# Telegram Topic IDs (Forum/Thread routing — staging-specific)
+telegram_topic_auto_remediator = ""  # Staging Auto-Remediator topic
+telegram_topic_git_radar       = ""  # Staging Git Radar topic
+telegram_topic_finops_sentinel = ""  # Staging FinOps Sentinel topic
+telegram_topic_guardian_alert  = ""  # Staging Guardian Alert topic
+
+# GitHub App Configuration
+github_app_id              = "YOUR_GITHUB_APP_ID"
+github_app_installation_id = "YOUR_GITHUB_APP_INSTALLATION_ID"
+github_app_private_key     = "YOUR_GITHUB_APP_PRIVATE_KEY"
+github_repo_owner          = "YOUR_GITHUB_REPO_OWNER"
+github_repo_name           = "YOUR_GITHUB_REPO_NAME"
+
+# Lambda Configuration (Staging: moderate resources)
+lambda_runtime     = "python3.11"
+lambda_timeout     = 120      # Moderate timeout for staging
+lambda_memory_size = 512      # Half of production

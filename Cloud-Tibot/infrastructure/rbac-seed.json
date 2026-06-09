@@ -1,0 +1,14 @@
+[
+  {
+    "_comment": "Seed data for the rbac-config DynamoDB table.",
+    "_comment2": "Replace Telegram user IDs below with real IDs. You can get a user's ID by messaging @userinfobot on Telegram.",
+    "_comment3": "Roles: 'viewer' (read-only, no approvals), 'approver' (can approve/reject), 'deployer' (can approve, reject, and trigger /deploy)",
+    "_comment4": "Run: python scripts/rbac_sync.py  to write these entries to DynamoDB"
+  },
+  {
+    "user_id": "3702164149",
+    "username": "admin",
+    "role": "deployer",
+    "display_name": "Admin"
+  }
+]

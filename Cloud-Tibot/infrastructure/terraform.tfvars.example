@@ -1,0 +1,46 @@
+# AWS Configuration
+aws_region      = "us-east-1"
+project_name    = "cortex"
+environment     = "prod"
+
+# Telegram Configuration (replace with actual values)
+telegram_token   = "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+telegram_chat_id = "-1001234567890"
+
+# Telegram Topic IDs (Forum/Thread routing)
+# Each module sends messages to its own topic in the Telegram group.
+# To find topic IDs: open a topic in Telegram Web, the URL ends with #chatid_TOPICID
+# Example URL: web.telegram.org/a/#-1003702164149_111 → topic ID = 111
+telegram_topic_auto_remediator = "114"   # Auto-Remediator topic thread ID
+telegram_topic_git_radar       = "111"   # CORTEX Git Radar topic thread ID
+telegram_topic_finops_sentinel = "134"   # FinOps Sentinel topic thread ID
+telegram_topic_guardian_alert  = "121"   # CORTEX Guardian Alert topic thread ID
+
+# GitHub App Configuration (GitHub App Authentication for Copilot SDK)
+# ⚠️ REQUIRED: Create a GitHub App with Copilot: Read permission
+# See: https://docs.github.com/en/apps/creating-github-apps
+# 
+# Steps to obtain these values:
+# 1. Create GitHub App at https://github.com/settings/apps
+# 2. Grant "Copilot: Read" permission
+# 3. Install the app to your account/org
+# 4. Note the App ID from the app settings
+# 5. Note the Installation ID from the installation URL
+# 6. Generate and download a private key (.pem file)
+# 7. Copy the ENTIRE private key content (including BEGIN/END lines) into github_app_private_key
+github_app_id               = "123456"  # Your GitHub App ID
+github_app_installation_id  = "12345678"  # Your Installation ID
+github_app_private_key      = <<-EOT
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA... (your full private key content here)
+...
+-----END RSA PRIVATE KEY-----
+EOT
+github_repo_owner = "your-github-username-or-org"
+github_repo_name  = "your-repo-name"
+
+# Lambda Configuration (optional overrides)
+# Increased defaults for AI agent workloads (300s timeout, 1024MB memory)
+lambda_runtime     = "python3.11"
+lambda_timeout     = 300
+lambda_memory_size = 1024

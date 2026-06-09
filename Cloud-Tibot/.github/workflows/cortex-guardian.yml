@@ -1,0 +1,77 @@
+name: 🛡️ CORTEX Guardian - PR Security Scanner
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, staging, develop]
+
+concurrency:
+  group: cortex-guardian-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  models: read
+
+jobs:
+  security-scan:
+    name: 🛡️ CORTEX Guardian Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install Python Dependencies
+        run: |
+          pip install PyGithub requests
+
+      - name: 🛡️ Run CORTEX Guardian Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CORTEX_RADAR_WEBHOOK: ${{ secrets.CORTEX_RADAR_WEBHOOK }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'openai/gpt-4.1' }}
+        run: python scripts/pr_guardian.py
+
+      - name: 📤 Upload Scan Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-guardian-report
+          path: guardian_report.json
+          retention-days: 30
+
+      - name: 📢 Telegram Alert (Critical Only)
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_GUARDIAN_ALERT: ${{ secrets.TELEGRAM_TOPIC_GUARDIAN_ALERT }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MESSAGE="🛡️ *CORTEX Guardian Alert*%0A%0A"
+            MESSAGE+="⚠️ Critical security issue detected!%0A"
+            MESSAGE+="PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}%0A"
+            MESSAGE+="👤 Author: @${{ github.event.pull_request.user.login }}%0A"
+            MESSAGE+="🔗 [View PR](${{ github.event.pull_request.html_url }})%0A%0A"
+            MESSAGE+="_Immediate review required_"
+
+            CURL_ARGS="-d chat_id=${TELEGRAM_CHAT_ID} -d text=${MESSAGE} -d parse_mode=Markdown -d disable_web_page_preview=true"
+            if [ -n "${TELEGRAM_TOPIC_GUARDIAN_ALERT}" ]; then
+              CURL_ARGS="${CURL_ARGS} -d message_thread_id=${TELEGRAM_TOPIC_GUARDIAN_ALERT}"
+            fi
+
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" ${CURL_ARGS}
+          fi

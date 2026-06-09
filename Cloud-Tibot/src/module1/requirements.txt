@@ -1,0 +1,9 @@
+# Lambda Requirements for Module 1: Amplify Build Notifier
+# Sends Telegram notifications on Amplify build status changes
+
+# Core dependencies (both included in Lambda runtime, pinned for compatibility)
+urllib3>=2.0.0
+boto3>=1.28.0
+
+# Note: This function only uses boto3 (Amplify API) and urllib3 (Telegram API)
+# No external dependencies needed beyond what Lambda runtime provides

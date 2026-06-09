@@ -1,0 +1,12 @@
+# Lambda Requirements for Module 3: FinOps Sentinel
+# GitHub Copilot SDK with GitHub App Authentication
+
+# Core dependencies
+urllib3>=2.0.0
+boto3>=1.34.0
+
+# GitHub App JWT Authentication
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
+# Note: boto3 is used for both Copilot agent and the scheduled FinOps CE queries.

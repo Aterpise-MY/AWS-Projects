@@ -1,0 +1,410 @@
+# =============================================================================
+# 🏗️ CORTEX Infrastructure Pipeline — Terraform-Focused IaC Orchestrator
+# =============================================================================
+# Scope: Terraform changes (terraform/**) and Lambda source (src/modules/**)
+#        ONLY. Frontend changes are ignored entirely.
+#
+# Flow:
+#   PR  → terraform-plan (fmt + validate + plan → summary posted to GitHub UI)
+#   Push → terraform-plan → terraform-apply → post-deploy-verify
+# =============================================================================
+
+name: CORTEX Infrastructure Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'infrastructure/terraform/**'
+      - 'src/modules/**'
+      - 'src/module*/**'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'infrastructure/terraform/**'
+      - 'src/modules/**'
+      - 'src/module*/**'
+
+concurrency:
+  group: cortex-infra-${{ github.ref }}
+  cancel-in-progress: false   # Never cancel an apply mid-flight
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: '1.6.0'
+  PYTHON_VERSION: '3.11'
+  TF_WORKING_DIR: infrastructure/terraform
+
+# =============================================================================
+# JOB 1: terraform-plan
+# Runs on: pull_request + push to main
+# =============================================================================
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write    # Allows posting plan summary as PR comment
+
+    outputs:
+      # Expose whether the plan contains changes (used by apply job gate)
+      has_changes: ${{ steps.plan_check.outputs.has_changes }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      - name: Setup Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false   # Raw exit codes needed for plan diff detection
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Format Check
+        id: fmt
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "Running terraform fmt -check ..."
+          terraform fmt -check -recursive
+        # Fails the job immediately if any .tf file is not formatted
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Init
+        id: init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate -no-color
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan \
+            -input=false \
+            -no-color \
+            -out=tfplan \
+            -detailed-exitcode
+        # Exit codes:
+        #   0 = no changes
+        #   1 = error
+        #   2 = changes present
+        continue-on-error: true   # We capture the exit code manually below
+
+      # -----------------------------------------------------------------------
+      - name: Detect plan changes
+        id: plan_check
+        run: |
+          EXIT_CODE=${{ steps.plan.outcome == 'success' && '0' || '1' }}
+          # Use the actual terraform exit code stored by -detailed-exitcode
+          if [ "${{ steps.plan.outcome }}" == "failure" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "Terraform plan failed — check logs above."
+            exit 1
+          fi
+          # Re-run plan with -detailed-exitcode to capture numeric exit code
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform show -no-color tfplan > /dev/null 2>&1
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      - name: Render plan to text
+        id: render
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "Rendering tfplan to plan.txt ..."
+          terraform show -no-color tfplan > plan.txt
+          echo "--- Plan preview (first 100 lines) ---"
+          head -100 plan.txt
+
+      # -----------------------------------------------------------------------
+      - name: Post plan to GitHub Step Summary
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          PLAN=$(cat plan.txt)
+          CHAR_COUNT=${#PLAN}
+          echo "Plan is ${CHAR_COUNT} characters."
+
+          # Truncate if >60 000 chars to stay within GitHub summary limits
+          if [ "$CHAR_COUNT" -gt 60000 ]; then
+            PLAN="${PLAN:0:60000}"$'\n\n⚠️  Plan truncated — download the tfplan artifact for the full output.'
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << 'SUMMARY_EOF'
+          ## 🏗️ Terraform Plan — CORTEX Infrastructure
+
+          | | Detail |
+          |---|---|
+          | **Workflow** | `${{ github.workflow }}` |
+          | **Triggered by** | `${{ github.event_name }}` |
+          | **Ref** | `${{ github.ref }}` |
+          | **SHA** | `${{ github.sha }}` |
+          | **Actor** | `${{ github.actor }}` |
+
+          <details>
+          <summary>📋 Full Terraform Plan Output (click to expand)</summary>
+
+          ```hcl
+          SUMMARY_EOF
+
+          echo "$PLAN" >> $GITHUB_STEP_SUMMARY
+
+          cat >> $GITHUB_STEP_SUMMARY << 'SUMMARY_EOF'
+          ```
+
+          </details>
+          SUMMARY_EOF
+
+      # -----------------------------------------------------------------------
+      - name: Post plan summary as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const fs = require('fs');
+            const planPath = `${process.env.TF_WORKING_DIR}/plan.txt`;
+            let plan = fs.readFileSync(planPath, 'utf8');
+            if (plan.length > 60000) {
+              plan = plan.substring(0, 60000) + '\n\n⚠️  Truncated — see full plan artifact.';
+            }
+
+            const body = `## 🏗️ Terraform Plan — CORTEX Infrastructure
+            **Triggered by**: \`${{ github.actor }}\` on \`${{ github.head_ref }}\`
+            <details>
+            <summary>📋 Full Plan (click to expand)</summary>
+
+            \`\`\`hcl
+            ${plan}
+            \`\`\`
+            </details>
+
+            > _To apply, merge this PR._`;
+
+            // Delete previous bot comments to avoid clutter
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments) {
+              if (comment.user.login === 'github-actions[bot]' &&
+                  comment.body.includes('CORTEX Infrastructure')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+
+      # -----------------------------------------------------------------------
+      - name: Upload tfplan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 1
+
+
+# =============================================================================
+# JOB 2: terraform-apply
+# Runs on: push to main ONLY (gate: github.ref == refs/heads/main)
+# =============================================================================
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    environment:
+      name: production              # Requires a manually configured GitHub Environment
+      url: https://console.aws.amazon.com/
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      - name: Setup Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # -----------------------------------------------------------------------
+      - name: Download tfplan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKING_DIR }}
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      # -----------------------------------------------------------------------
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "Applying saved plan ..."
+          terraform apply -auto-approve tfplan
+
+      # -----------------------------------------------------------------------
+      - name: Collect post-apply outputs
+        id: tf_outputs
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "--- Terraform outputs ---"
+          terraform output -no-color || true
+
+      # -----------------------------------------------------------------------
+      - name: Post apply summary to GitHub Step Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## ✅ Terraform Apply Complete
+
+          | | |
+          |---|---|
+          | **Applied by** | `${{ github.actor }}` |
+          | **SHA** | `${{ github.sha }}` |
+          | **Time** | `${{ github.event.head_commit.timestamp }}` |
+          EOF
+
+
+# =============================================================================
+# JOB 3: post-deploy-verify
+# Runs on: after terraform-apply (push to main only)
+# =============================================================================
+  post-deploy-verify:
+    name: Post-Deploy Verification
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        run: |
+          pip install --quiet boto3 requests
+
+      # -----------------------------------------------------------------------
+      - name: Run Infrastructure Health Check
+        id: health_check
+        env:
+          AWS_REGION:        ${{ env.AWS_REGION }}
+          ENVIRONMENT:       prod
+          PROJECT_NAME:      cortex
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "Running scripts/infra_health_check.py ..."
+          python scripts/infra_health_check.py
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      - name: Post success summary to GitHub Step Summary
+        if: success()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## ✅ Infrastructure Updated Successfully
+
+          All post-deploy health checks passed.
+
+          | Check | Status |
+          |---|---|
+          | API Gateway | ✅ Active |
+          | DynamoDB `cortex_radar_state` | ✅ Active |
+          | EventBridge Rules | ✅ Enabled |
+          | Lambda Functions | ✅ Active |
+
+          **Deploy completed at**: `${{ github.event.head_commit.timestamp }}`
+          **Deployed SHA**: `${{ github.sha }}`
+          **Deployed by**: `${{ github.actor }}`
+          EOF
+
+      # -----------------------------------------------------------------------
+      - name: Post failure summary to GitHub Step Summary
+        if: failure()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## ❌ Post-Deploy Health Check Failed
+
+          One or more AWS resources did not pass verification after `terraform apply`.
+          Check the job logs above for details.
+
+          **Reference SHA**: `${{ github.sha }}`
+          EOF
+
+      # -----------------------------------------------------------------------
+      - name: Notify Telegram — Deploy Success
+        if: success()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *CORTEX Infrastructure Deployed*%0A%0A*SHA*: \`${{ github.sha }}\`%0A*Actor*: ${{ github.actor }}%0A*Branch*: main%0A%0AAll health checks passed."
+
+      # -----------------------------------------------------------------------
+      - name: Notify Telegram — Deploy Failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *CORTEX Infrastructure Deploy FAILED*%0A%0A*SHA*: \`${{ github.sha }}\`%0A*Actor*: ${{ github.actor }}%0A%0APost-deploy health check failed — check GitHub Actions for details."

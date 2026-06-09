@@ -1,0 +1,374 @@
+name: 🚀 DND Platform Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/**'
+      - 'src/**'
+      - 'api/**'
+      - 'supabase/**'
+  workflow_dispatch:
+    inputs:
+      deploy_infrastructure:
+        description: 'Deploy Infrastructure (Terraform)'
+        type: boolean
+        default: false
+      deploy_functions:
+        description: 'Deploy Lambda Functions'
+        type: boolean
+        default: false
+      deploy_frontend:
+        description: 'Deploy Frontend (Vercel)'
+        type: boolean
+        default: true
+
+env:
+  AWS_REGION: 'us-east-1'
+  ENVIRONMENT: 'production'
+
+jobs:
+  # ============================================================================
+  # JOB 1: Pre-deployment Validation
+  # ============================================================================
+  pre-deployment-check:
+    name: ✅ Pre-Deployment Validation
+    runs-on: ubuntu-latest
+    
+    outputs:
+      should_deploy_infra: ${{ steps.detect.outputs.infra }}
+      should_deploy_lambda: ${{ steps.detect.outputs.lambda }}
+      should_deploy_frontend: ${{ steps.detect.outputs.frontend }}
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      
+      - name: 🔍 Detect Changes
+        id: detect
+        run: |
+          INFRA_CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E "infrastructure/.*\.tf" | wc -l)
+          LAMBDA_CHANGED=$(git diff --name-only HEAD^ HEAD | grep "infrastructure/lambda_src" | wc -l)
+          FRONTEND_CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E "(src/|api/|components/)" | wc -l)
+          
+          echo "infra=$([[ $INFRA_CHANGED -gt 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "lambda=$([[ $LAMBDA_CHANGED -gt 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "frontend=$([[ $FRONTEND_CHANGED -gt 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          
+          echo "🔍 Change Detection:"
+          echo "Infrastructure: $([[ $INFRA_CHANGED -gt 0 ]] && echo '✅ Changed' || echo '⏭️ No changes')"
+          echo "Lambda Functions: $([[ $LAMBDA_CHANGED -gt 0 ]] && echo '✅ Changed' || echo '⏭️ No changes')"
+          echo "Frontend: $([[ $FRONTEND_CHANGED -gt 0 ]] && echo '✅ Changed' || echo '⏭️ No changes')"
+      
+      - name: ✅ Health Check
+        run: |
+          echo "🏥 Running pre-deployment health checks..."
+          
+          # Check if secrets are set
+          [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && echo "❌ AWS_ACCESS_KEY_ID not set" && exit 1
+          [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && echo "⚠️ TELEGRAM_BOT_TOKEN not set"
+          
+          echo "✅ Health checks passed!"
+
+  # ============================================================================
+  # JOB 2: Deploy Infrastructure
+  # ============================================================================
+  deploy-infrastructure:
+    name: 🏗️ Deploy AWS Infrastructure
+    runs-on: ubuntu-latest
+    needs: pre-deployment-check
+    if: |
+      needs.pre-deployment-check.outputs.should_deploy_infra == 'true' || 
+      github.event.inputs.deploy_infrastructure == 'true'
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+      
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: 🏗️ Terraform Init
+        working-directory: infrastructure
+        run: terraform init
+      
+      - name: 📋 Terraform Plan
+        working-directory: infrastructure
+        env:
+          TF_VAR_supabase_jwt_secret: ${{ secrets.SUPABASE_JWT_SECRET }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_environment: ${{ env.ENVIRONMENT }}
+        run: terraform plan -out=tfplan
+      
+      - name: 🚀 Terraform Apply
+        working-directory: infrastructure
+        env:
+          TF_VAR_supabase_jwt_secret: ${{ secrets.SUPABASE_JWT_SECRET }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_environment: ${{ env.ENVIRONMENT }}
+        run: terraform apply -auto-approve tfplan
+      
+      - name: 📤 Save Infrastructure Outputs
+        working-directory: infrastructure
+        run: |
+          terraform output -json > outputs.json
+          cat outputs.json
+      
+      - name: 📊 Upload Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs
+          path: infrastructure/outputs.json
+
+  # ============================================================================
+  # JOB 3: Deploy Lambda Functions
+  # ============================================================================
+  deploy-lambda-functions:
+    name: ⚡ Deploy Lambda Functions
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-check, deploy-infrastructure]
+    if: |
+      always() &&
+      (needs.pre-deployment-check.outputs.should_deploy_lambda == 'true' || 
+       github.event.inputs.deploy_functions == 'true')
+    
+    strategy:
+      matrix:
+        lambda:
+          - auth_handler
+          - upload_signer
+          - pdf_processor
+          - get_characters
+          - save_character
+          - delete_character
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 Package Lambda Function
+        working-directory: infrastructure/lambda_src/${{ matrix.lambda }}
+        run: |
+          echo "📦 Packaging ${{ matrix.lambda }}..."
+          
+          # Install dependencies
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt -t .
+          fi
+          
+          # Create deployment package
+          zip -r ../../lambda_packages/${{ matrix.lambda }}.zip . -x "*.pyc" -x "__pycache__/*"
+          
+          echo "✅ Package created: ${{ matrix.lambda }}.zip"
+      
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: 🚀 Update Lambda Function Code
+        run: |
+          FUNCTION_NAME="dnd-${{ matrix.lambda }}-${{ env.ENVIRONMENT }}"
+          
+          echo "🚀 Updating Lambda function: $FUNCTION_NAME"
+          
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://infrastructure/lambda_packages/${{ matrix.lambda }}.zip \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "✅ Lambda function updated: ${{ matrix.lambda }}"
+
+  # ============================================================================
+  # JOB 4: Deploy Supabase Edge Functions
+  # ============================================================================
+  deploy-supabase:
+    name: 🔷 Deploy Supabase Edge Functions
+    runs-on: ubuntu-latest
+    needs: pre-deployment-check
+    if: contains(github.event.head_commit.modified, 'supabase/')
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🔷 Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      
+      - name: 📦 Install Supabase CLI
+        run: |
+          npm install -g supabase
+      
+      - name: 🔑 Supabase Login
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase login --token $SUPABASE_ACCESS_TOKEN
+      
+      - name: 🚀 Deploy Edge Function
+        working-directory: supabase/functions
+        run: |
+          supabase functions deploy process-action
+          echo "✅ Edge function deployed"
+      
+      - name: 🔐 Set Secrets
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase secrets set GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" --project-ref $SUPABASE_PROJECT_REF
+          echo "✅ Secrets configured"
+
+  # ============================================================================
+  # JOB 5: Deploy Frontend (Vercel)
+  # ============================================================================
+  deploy-frontend:
+    name: 🎨 Deploy Frontend (Vercel)
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-lambda-functions]
+    if: |
+      always() &&
+      (needs.pre-deployment-check.outputs.should_deploy_frontend == 'true' || 
+       github.event.inputs.deploy_frontend == 'true')
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: 📚 Install Dependencies
+        run: npm ci
+      
+      - name: 🏗️ Build Frontend
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_AWS_API_URL: ${{ secrets.VITE_AWS_API_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npm run build
+      
+      - name: 🚀 Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+          working-directory: ./
+
+  # ============================================================================
+  # JOB 6: Post-Deployment Tests
+  # ============================================================================
+  post-deployment-tests:
+    name: 🧪 Post-Deployment Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-lambda-functions, deploy-frontend]
+    if: always()
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🧪 Test API Gateway Endpoints
+        env:
+          API_URL: ${{ secrets.VITE_AWS_API_URL }}
+        run: |
+          echo "🧪 Testing API endpoints..."
+          
+          # Test health endpoint
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/health" || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
+            echo "✅ API Gateway is responding"
+          else
+            echo "⚠️ API Gateway test returned: $HTTP_CODE"
+          fi
+      
+      - name: 🌐 Test Frontend Deployment
+        env:
+          FRONTEND_URL: ${{ secrets.VERCEL_URL }}
+        run: |
+          echo "🌐 Testing frontend deployment..."
+          
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://${FRONTEND_URL}" || echo "000")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Frontend is live!"
+          else
+            echo "⚠️ Frontend test returned: $HTTP_CODE"
+          fi
+
+  # ============================================================================
+  # JOB 7: Deployment Notification
+  # ============================================================================
+  deployment-notification:
+    name: 📢 Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-lambda-functions, deploy-frontend, post-deployment-tests]
+    if: always()
+    
+    steps:
+      - name: 📤 Telegram Deployment Alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_FINOPS: ${{ secrets.TELEGRAM_TOPIC_FINOPS }}
+        run: |
+          INFRA_STATUS="${{ needs.deploy-infrastructure.result }}"
+          LAMBDA_STATUS="${{ needs.deploy-lambda-functions.result }}"
+          FRONTEND_STATUS="${{ needs.deploy-frontend.result }}"
+          TESTS_STATUS="${{ needs.post-deployment-tests.result }}"
+          
+          OVERALL_STATUS="✅ SUCCESS"
+          if [[ "$INFRA_STATUS" == "failure" ]] || [[ "$LAMBDA_STATUS" == "failure" ]] || [[ "$FRONTEND_STATUS" == "failure" ]]; then
+            OVERALL_STATUS="❌ FAILED"
+          fi
+          
+          MESSAGE="🚀 *DND Platform Deployment*%0A%0A"
+          MESSAGE+="📅 $(date '+%Y-%m-%d %H:%M:%S UTC')%0A"
+          MESSAGE+="🔗 Commit: \`${GITHUB_SHA:0:7}\` by @${{ github.actor }}%0A%0A"
+          MESSAGE+="*Deployment Results:*%0A"
+          MESSAGE+="🏗️ Infrastructure: ${INFRA_STATUS:-skipped}%0A"
+          MESSAGE+="⚡ Lambda Functions: ${LAMBDA_STATUS:-skipped}%0A"
+          MESSAGE+="🎨 Frontend: ${FRONTEND_STATUS:-skipped}%0A"
+          MESSAGE+="🧪 Tests: ${TESTS_STATUS:-skipped}%0A%0A"
+          MESSAGE+="*Overall Status:* ${OVERALL_STATUS}%0A%0A"
+          MESSAGE+="🔗 [View Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          # Build curl command with optional topic routing
+          CURL_ARGS="-d chat_id=${TELEGRAM_CHAT_ID} -d text=${MESSAGE} -d parse_mode=Markdown -d disable_web_page_preview=true"
+          if [ -n "${TELEGRAM_TOPIC_FINOPS}" ]; then
+            CURL_ARGS="${CURL_ARGS} -d message_thread_id=${TELEGRAM_TOPIC_FINOPS}"
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" ${CURL_ARGS}
+      
+      - name: 📧 Send Deployment Summary
+        if: failure()
+        run: |
+          echo "⚠️ Deployment had failures! Check the workflow logs for details."
+          echo "🔗 Workflow: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

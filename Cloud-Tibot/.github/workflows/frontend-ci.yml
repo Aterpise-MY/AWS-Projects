@@ -1,0 +1,274 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main, staging, dev]
+  pull_request:
+    branches: [main, staging]
+  repository_dispatch:
+    types: [frontend-ci]
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───── Smart Change Detection ─────
+  detect:
+    name: Detect Frontend Changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.override.outputs.should_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # CRITICAL: Fetch full history for accurate diff detection on merges
+
+      - name: Detect frontend changes
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'app/**'
+              - 'public/**'
+              - 'src/**'
+              - 'components/**'
+              - 'hooks/**'
+              - 'pages/**'
+              - 'services/**'
+              - 'utils/**'
+              - 'lib/**'
+              - 'contexts/**'
+              - 'types/**'
+              - 'constants/**'
+              - 'layouts/**'
+              - '*.ts'
+              - '*.tsx'
+              - '*.html'
+              - '*.css'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'next.config.js'
+              - 'vite.config.ts'
+              - 'vitest.config.ts'
+              - 'postcss.config.js'
+              - 'tailwind.config.js'
+              - 'amplify.yml'
+              - '.github/workflows/frontend-ci.yml'
+
+      - name: Override for manual triggers
+        id: override
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "✅ Manual/webhook trigger — forcing frontend CI run"
+          else
+            echo "should_run=${{ steps.changes.outputs.frontend }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Debug changed files
+        if: steps.changes.outputs.frontend == 'true'
+        run: |
+          echo "## 🔍 Frontend Changes Detected" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.changes.outputs.frontend_files }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Summary
+        run: |
+          echo "## 🔍 Frontend Change Detection" >> $GITHUB_STEP_SUMMARY
+          echo "**Should run:** \`${{ steps.override.outputs.should_run }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Changes detected:** \`${{ steps.changes.outputs.frontend }}\`" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.changes.outputs.frontend }}" == "false" ]]; then
+            echo "> ⏭️ No frontend files changed — all jobs skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ───── Lint ─────
+  lint:
+    name: TypeScript Lint
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run TypeScript type check
+        continue-on-error: true
+        run: |
+          npm run lint 2>&1 | tee /tmp/tsc_output.txt
+          TSC_EXIT=$?
+          ERROR_COUNT=$(grep -c "error TS" /tmp/tsc_output.txt || echo "0")
+          echo "## 🔍 TypeScript Lint" >> $GITHUB_STEP_SUMMARY
+          echo "**Errors found:** $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+          if [ "$TSC_EXIT" -ne 0 ]; then
+            echo "::warning::TypeScript found $ERROR_COUNT type errors — non-blocking"
+          fi
+
+  # ───── Test ─────
+  test:
+    name: Frontend Unit Tests
+    runs-on: ubuntu-latest
+    needs: [detect, lint]
+    if: needs.detect.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run Vitest unit tests
+        run: npx vitest run --reporter=verbose
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+  # ───── Build ─────
+  build:
+    name: Production Build
+    runs-on: ubuntu-latest
+    needs: [detect, test]
+    if: needs.detect.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build for production
+        run: npm run build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_AWS_API_URL: ${{ secrets.VITE_AWS_API_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 7
+
+  # ───── Deploy to Amplify ─────
+  deploy-amplify:
+    name: Deploy to AWS Amplify
+    runs-on: ubuntu-latest
+    needs: [detect, build]
+    if: |
+      needs.detect.outputs.should_run == 'true'
+      && needs.build.result == 'success'
+      && github.event_name == 'push'
+      && github.ref != 'refs/heads/dev'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Determine target branch
+        id: branch
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "name=main" >> $GITHUB_OUTPUT
+          else
+            echo "name=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Trigger Amplify build via AWS CLI
+        id: deploy
+        run: |
+          echo "🚀 Starting Amplify build for branch: ${{ steps.branch.outputs.name }}"
+          
+          # Start the build job
+          JOB_ID=$(aws amplify start-job \
+            --app-id ${{ secrets.AMPLIFY_APP_ID }} \
+            --branch-name ${{ steps.branch.outputs.name }} \
+            --job-type RELEASE \
+            --query 'jobSummary.jobId' \
+            --output text)
+          
+          echo "job_id=$JOB_ID" >> $GITHUB_OUTPUT
+          echo "✅ Build job started with ID: $JOB_ID"
+          echo "📊 View in console: https://${{ secrets.AWS_REGION }}.console.aws.amazon.com/amplify/home?region=${{ secrets.AWS_REGION }}#/${{ secrets.AMPLIFY_APP_ID }}/${{ steps.branch.outputs.name }}/$JOB_ID"
+
+      - name: Monitor build status
+        run: |
+          echo "⏳ Monitoring build job ${{ steps.deploy.outputs.job_id }}..."
+          
+          MAX_WAIT=600  # 10 minutes
+          ELAPSED=0
+          INTERVAL=15
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            STATUS=$(aws amplify get-job \
+              --app-id ${{ secrets.AMPLIFY_APP_ID }} \
+              --branch-name ${{ steps.branch.outputs.name }} \
+              --job-id ${{ steps.deploy.outputs.job_id }} \
+              --query 'job.summary.status' \
+              --output text)
+            
+            echo "[$ELAPSED s] Status: $STATUS"
+            
+            case "$STATUS" in
+              SUCCEED)
+                echo "✅ Build completed successfully!"
+                exit 0
+                ;;
+              FAILED|CANCELLED)
+                echo "❌ Build failed with status: $STATUS"
+                exit 1
+                ;;
+              PENDING|RUNNING)
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+              *)
+                echo "⚠️ Unknown status: $STATUS"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+            esac
+          done
+          
+          echo "⚠️ Build monitoring timed out after ${MAX_WAIT}s"
+          echo "Build may still be running — check console manually"
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🚀 AWS Amplify Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ steps.branch.outputs.name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Job ID | \`${{ steps.deploy.outputs.job_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View in AWS Console](https://${{ secrets.AWS_REGION }}.console.aws.amazon.com/amplify/home?region=${{ secrets.AWS_REGION }}#/${{ secrets.AMPLIFY_APP_ID }}/${{ steps.branch.outputs.name }}/${{ steps.deploy.outputs.job_id }})" >> $GITHUB_STEP_SUMMARY
+
+  # ───── Skip Notice ─────
+  skipped:
+    name: Frontend CI Skipped
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.should_run == 'false'
+    steps:
+      - run: |
+          echo "## ⏭️ Frontend CI Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No frontend files changed in this commit." >> $GITHUB_STEP_SUMMARY

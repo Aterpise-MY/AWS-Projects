@@ -1,0 +1,31 @@
+# AWS Configuration for DEV Environment
+aws_region     = "us-east-1"
+amplify_region = "us-east-2"   # Amplify app lives in us-east-2
+project_name   = "cloud-tibot"
+environment    = "dev"
+
+# Telegram Configuration
+# Replace these with your actual Telegram bot token and chat ID
+telegram_token   = "8281522719:AAHb8gk-sIVpjnGmOIYbE5FuzZ347J4FKTc"
+telegram_chat_id = "-1003702164149"
+
+# Telegram Topic IDs (Forum/Thread routing for each module)
+# Get from Telegram Web URL: web.telegram.org/a/#-CHATID_TOPICID → use the TOPICID part
+telegram_topic_auto_remediator = "114"   # Auto-Remediator topic
+telegram_topic_git_radar       = "111"   # CORTEX Git Radar topic
+telegram_topic_finops_sentinel = "134"   # FinOps Sentinel topic (live value)
+telegram_topic_guardian_alert  = "121"   # CORTEX Guardian Alert topic
+telegram_topic_cortex_infra    = "236"   # Cortex Infra Pipeline topic (plan approvals & deploy results)
+
+# GitHub App Configuration (Optional - only needed for other modules with AI agent)
+# These can be empty strings for the dev environment if you're only using the notifier
+github_app_id              = "YOUR_GITHUB_APP_ID"
+github_app_installation_id = "YOUR_GITHUB_APP_INSTALLATION_ID"
+github_app_private_key     = "YOUR_GITHUB_APP_PRIVATE_KEY"
+github_repo_owner          = "YOUR_GITHUB_REPO_OWNER"
+github_repo_name           = "YOUR_GITHUB_REPO_NAME"
+
+# Lambda Configuration (DEV can use lower resource allocation)
+lambda_runtime      = "python3.11"
+lambda_timeout      = 60        # Reduced from 300 for dev
+lambda_memory_size  = 256       # Reduced from 1024 for dev (notify function needs minimal resources)

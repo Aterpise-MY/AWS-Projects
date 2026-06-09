@@ -1,0 +1,84 @@
+name: 🛡️ CORTEX Guardian - PR Security Scanner
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Trigger when PR is opened, updated with new commits, or reopened
+
+# Prevent multiple runs for the same PR
+concurrency:
+  group: cortex-guardian-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-security-scan:
+    name: AI Code Review & Security Analysis
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write  # Required to post comments
+      issues: write         # Required for PR comments (PRs are issues)
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for better diff analysis
+      
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install Dependencies
+        run: |
+          echo "Installing CORTEX Guardian dependencies..."
+          pip install --upgrade pip
+          pip install -r src/module4_agent/requirements.txt
+          echo "✅ Dependencies installed"
+      
+      - name: 🛡️ Run CORTEX Guardian Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CORTEX_RADAR_WEBHOOK: ${{ secrets.CORTEX_RADAR_WEBHOOK }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          echo "=================================================="
+          echo "🛡️  CORTEX-GUARDIAN | AI-Powered PR Security Scan"
+          echo "=================================================="
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "PR Title: ${{ github.event.pull_request.title }}"
+          echo "Author: @${{ github.event.pull_request.user.login }}"
+          echo "=================================================="
+          echo ""
+          
+          python src/module4_agent/pr_guardian.py
+        continue-on-error: true  # Don't fail workflow if scan finds issues
+      
+      - name: 📊 Upload Scan Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-guardian-logs
+          path: |
+            *.log
+            **/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      
+      - name: ✅ Scan Complete
+        if: success()
+        run: |
+          echo "✅ CORTEX Guardian scan completed successfully!"
+          echo "Check PR comments and CORTEX Radar dashboard for results."
+      
+      - name: ⚠️ Scan Failed
+        if: failure()
+        run: |
+          echo "⚠️  CORTEX Guardian scan encountered issues."
+          echo "Check logs above for details."

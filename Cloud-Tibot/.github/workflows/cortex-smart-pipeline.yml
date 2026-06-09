@@ -1,0 +1,728 @@
+name: "🧠 CORTEX Smart Hybrid Pipeline"
+description: "Intelligent path-based CI/CD for DND Platform - Infrastructure & Frontend separation"
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - develop
+  pull_request:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+    inputs:
+      force_infra:
+        description: "Force infrastructure deployment"
+        required: false
+        default: "false"
+      force_verify:
+        description: "Force infrastructure verification"
+        required: false
+        default: "false"
+
+concurrency:
+  group: ${{ github.ref }}-cortex-pipeline
+  cancel-in-progress: false  # Never cancel a running apply mid-flight
+
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: 1.10.5
+  PYTHON_VERSION: "3.11"
+  TF_WORKING_DIR: infrastructure
+
+jobs:
+  # =============================================================================
+  # JOB 1: PATH DETECTION - Determine what changed
+  # =============================================================================
+  filter:
+    name: "🔍 Detect Changes"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      infra: ${{ steps.filter.outputs.infra }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      infra_test: ${{ steps.filter.outputs.infra_test }}
+      any: ${{ steps.filter.outputs.any }}
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "🎯 Filter paths"
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            infra:
+              - 'infrastructure/**/*.tf'
+              - 'infrastructure/**/*.tfvars'
+              - 'infrastructure/lambda_src/**'
+              - 'infrastructure/scripts/**'
+              - 'api/**'
+            
+            frontend:
+              - 'app/**'
+              - 'components/**'
+              - 'pages/**'
+              - 'public/**'
+              - 'styles/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'next.config.js'
+              - 'tsconfig.json'
+              - 'vite.config.ts'
+              - 'index.html'
+              - 'src/components/**'
+              - 'src/hooks/**'
+              - 'src/contexts/**'
+              - 'lib/**'
+              - 'services/**'
+            
+            infra_test:
+              - 'scripts/infra_health_check.py'
+              - 'scripts/test*.py'
+              - 'scripts/requirements.txt'
+            
+            docs:
+              - '**.md'
+              - 'docs/**'
+
+      - name: "📊 Summary"
+        run: |
+          echo "🔍 Change Detection Summary"
+          echo "======================================"
+          echo "Infrastructure changed: ${{ steps.filter.outputs.infra }}"
+          echo "Frontend changed: ${{ steps.filter.outputs.frontend }}"
+          echo "Infra tests changed: ${{ steps.filter.outputs.infra_test }}"
+          echo "Documentation changed: ${{ steps.filter.outputs.docs }}"
+          echo "======================================"
+          
+          if [[ "${{ steps.filter.outputs.infra }}" == "false" && \
+                "${{ steps.filter.outputs.frontend }}" == "false" && \
+                "${{ steps.filter.outputs.infra_test }}" == "false" ]]; then
+            echo "✅ Only documentation/workflow changes detected - skipping deployment"
+          fi
+
+  # =============================================================================
+  # JOB 2: TERRAFORM PLAN - Run plan, parse results, notify topic 236
+  # =============================================================================
+  terraform-plan:
+    name: "📋 Terraform Plan"
+    runs-on: ubuntu-latest
+    needs: filter
+    if: needs.filter.outputs.infra == 'true' || github.event.inputs.force_infra == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      has_changes:       ${{ steps.parse-plan.outputs.has_changes }}
+      resources_add:     ${{ steps.parse-plan.outputs.resources_add }}
+      resources_change:  ${{ steps.parse-plan.outputs.resources_change }}
+      resources_destroy: ${{ steps.parse-plan.outputs.resources_destroy }}
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "🔐 Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "⚙️ Setup Terraform"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: "📦 Initialize Terraform"
+        id: terraform-init
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE }}" \
+            -upgrade
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: "✨ Format check"
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform fmt -check -recursive -diff || true
+        continue-on-error: true
+
+      - name: "✅ Validate"
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform validate
+
+      - name: "📋 Plan"
+        id: run-plan
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          set +e
+          terraform plan \
+            -detailed-exitcode \
+            -var="environment=${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}" \
+            -out=tfplan.bin \
+            -lock=true \
+            -input=false 2>&1 | tee tfplan.txt
+          TF_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "tf_exit_code=$TF_EXIT" >> $GITHUB_OUTPUT
+          echo "Terraform exit code: $TF_EXIT  (0=no-changes, 1=error, 2=changes-present)"
+          # Fail the job immediately if Terraform itself errored
+          [ $TF_EXIT -eq 1 ] && exit 1 || true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: "🔍 Parse plan result"
+        id: parse-plan
+        run: |
+          TF_EXIT="${{ steps.run-plan.outputs.tf_exit_code }}"
+          if [ "$TF_EXIT" == "2" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            ADD=$(grep -oP '\d+ to add'     ${{ env.TF_WORKING_DIR }}/tfplan.txt | grep -oP '\d+' | head -1 || echo "0")
+            CHG=$(grep -oP '\d+ to change'  ${{ env.TF_WORKING_DIR }}/tfplan.txt | grep -oP '\d+' | head -1 || echo "0")
+            DEL=$(grep -oP '\d+ to destroy' ${{ env.TF_WORKING_DIR }}/tfplan.txt | grep -oP '\d+' | head -1 || echo "0")
+            echo "resources_add=$ADD"     >> $GITHUB_OUTPUT
+            echo "resources_change=$CHG"  >> $GITHUB_OUTPUT
+            echo "resources_destroy=$DEL" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected: +$ADD ~$CHG -$DEL"
+          else
+            echo "has_changes=false"    >> $GITHUB_OUTPUT
+            echo "resources_add=0"      >> $GITHUB_OUTPUT
+            echo "resources_change=0"   >> $GITHUB_OUTPUT
+            echo "resources_destroy=0"  >> $GITHUB_OUTPUT
+            echo "✅ No infrastructure changes detected"
+          fi
+
+      - name: "📊 Plan Summary"
+        if: always()
+        run: |
+          echo "### Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Has changes: \`${{ steps.parse-plan.outputs.has_changes }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Resources: +${{ steps.parse-plan.outputs.resources_add }} ~${{ steps.parse-plan.outputs.resources_change }} -${{ steps.parse-plan.outputs.resources_destroy }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          tail -30 ${{ env.TF_WORKING_DIR }}/tfplan.txt >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: "📦 Upload plan artifact"
+        if: steps.parse-plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ env.TF_WORKING_DIR }}/tfplan.bin
+          retention-days: 1
+
+      # ----- Telegram: changes detected — send approval button -----
+      - name: "🔔 Notify Telegram — Plan Ready (⚠️ awaiting approval)"
+        if: steps.parse-plan.outputs.has_changes == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID:  ${{ secrets.TELEGRAM_TOPIC_CORTEX_INFRA }}
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id  = os.environ["TELEGRAM_CHAT_ID"]
+          topic_id = int(os.environ["TELEGRAM_TOPIC_ID"])
+
+          add     = "${{ steps.parse-plan.outputs.resources_add }}"
+          change  = "${{ steps.parse-plan.outputs.resources_change }}"
+          destroy = "${{ steps.parse-plan.outputs.resources_destroy }}"
+          repo    = "${{ github.repository }}"
+          branch  = "${{ github.ref_name }}"
+          actor   = "${{ github.actor }}"
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          text = (
+              "\u26a0\ufe0f *Terraform Plan \u2014 Approval Required*\n\n"
+              f"*Repo:* `{repo}`\n"
+              f"*Branch:* `{branch}`\n"
+              f"*Triggered by:* @{actor}\n\n"
+              f"\U0001f4ca *Planned changes:*\n"
+              f"  \u2795 {add} to add\n"
+              f"  \u2699\ufe0f {change} to change\n"
+              f"  \U0001f5d1\ufe0f {destroy} to destroy\n\n"
+              "Review the plan and click *Approve \u0026 Deploy* to proceed.\n"
+              "The pipeline is paused until you approve in GitHub."
+          )
+
+          payload = {
+              "chat_id": chat_id,
+              "message_thread_id": topic_id,
+              "parse_mode": "Markdown",
+              "text": text,
+              "reply_markup": {
+                  "inline_keyboard": [[
+                      {
+                          "text": "\u2705 Approve & Deploy",
+                          "url": run_url
+                      }
+                  ]]
+              }
+          }
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Telegram OK: HTTP {resp.status}")
+          except urllib.request.HTTPError as e:
+              print(f"Telegram error: {e.read().decode()}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      # ----- Telegram: no changes — informational only -----
+      - name: "🔔 Notify Telegram — No Infrastructure Changes"
+        if: steps.parse-plan.outputs.has_changes == 'false'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID:  ${{ secrets.TELEGRAM_TOPIC_CORTEX_INFRA }}
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id  = os.environ["TELEGRAM_CHAT_ID"]
+          topic_id = int(os.environ["TELEGRAM_TOPIC_ID"])
+
+          repo   = "${{ github.repository }}"
+          branch = "${{ github.ref_name }}"
+          actor  = "${{ github.actor }}"
+
+          text = (
+              "\u2705 *Terraform Plan \u2014 No Changes*\n\n"
+              f"*Repo:* `{repo}`\n"
+              f"*Branch:* `{branch}`\n"
+              f"*Triggered by:* @{actor}\n\n"
+              "Infrastructure is already up to date.\n"
+              "Terraform apply step was skipped."
+          )
+
+          payload = {
+              "chat_id": chat_id,
+              "message_thread_id": topic_id,
+              "parse_mode": "Markdown",
+              "text": text
+          }
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Telegram OK: HTTP {resp.status}")
+          except urllib.request.HTTPError as e:
+              print(f"Telegram error: {e.read().decode()}", file=sys.stderr)
+          PYEOF
+
+  # =============================================================================
+  # JOB 3: TERRAFORM APPLY - Paused at environment: production until approved
+  # =============================================================================
+  terraform-apply:
+    name: "🚀 Terraform Apply"
+    runs-on: ubuntu-latest
+    needs: [filter, terraform-plan]
+    if: needs.terraform-plan.outputs.has_changes == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      api_gateway_url:  ${{ steps.terraform-output.outputs.api_gateway_url }}
+      lambda_functions: ${{ steps.terraform-output.outputs.lambda_functions }}
+      dynamodb_table:   ${{ steps.terraform-output.outputs.dynamodb_table }}
+      tf_apply_status:  ${{ steps.terraform-apply.outcome }}
+    environment:
+      name: production
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "🔐 Configure AWS credentials"
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "⚙️ Setup Terraform"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: "📦 Initialize Terraform"
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE }}" \
+            -upgrade
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: "📥 Download plan artifact"
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: "🚀 Apply"
+        id: terraform-apply
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          terraform apply -auto-approve -lock=true -input=false tfplan.bin
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: "📤 Export outputs"
+        id: terraform-output
+        if: steps.terraform-apply.outcome == 'success'
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          API_GW_URL=$(terraform output -raw api_gateway_url 2>/dev/null || echo "unknown")
+          LAMBDA_FUNCS=$(terraform output -json lambda_functions 2>/dev/null || echo "{}")
+          DYNAMO_TABLE=$(terraform output -raw dynamodb_table_name 2>/dev/null || echo "unknown")
+
+          echo "api_gateway_url=$API_GW_URL"                       >> $GITHUB_OUTPUT
+          echo "lambda_functions=$(echo $LAMBDA_FUNCS | jq -c .)"  >> $GITHUB_OUTPUT
+          echo "dynamodb_table=$DYNAMO_TABLE"                       >> $GITHUB_OUTPUT
+
+          echo "✅ Infrastructure Outputs:"
+          echo "  API Gateway URL: $API_GW_URL"
+          echo "  DynamoDB Table:  $DYNAMO_TABLE"
+
+      - name: "📝 Comment on PR"
+        if: github.event_name == 'pull_request' && steps.terraform-apply.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚀 Infrastructure Deployed\n\n**Status**: success\n\n🔗 [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            });
+
+      # ----- Telegram: apply failed or was rejected/cancelled -----
+      - name: "🔔 Notify Telegram — Apply Failed / Declined"
+        if: failure() || cancelled()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID:  ${{ secrets.TELEGRAM_TOPIC_CORTEX_INFRA }}
+          JOB_STATUS:         ${{ job.status }}
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id  = os.environ["TELEGRAM_CHAT_ID"]
+          topic_id = int(os.environ["TELEGRAM_TOPIC_ID"])
+          status   = os.environ.get("JOB_STATUS", "failed")
+
+          icon    = "\U0001f6ab" if status == "cancelled" else "\u274c"
+          heading = "Declined / Cancelled" if status == "cancelled" else "Apply Failed"
+
+          repo    = "${{ github.repository }}"
+          branch  = "${{ github.ref_name }}"
+          actor   = "${{ github.actor }}"
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          text = (
+              f"{icon} *Terraform Apply \u2014 {heading}*\n\n"
+              f"*Repo:* `{repo}`\n"
+              f"*Branch:* `{branch}`\n"
+              f"*Actor:* @{actor}\n\n"
+              "The deployment was not approved, was declined,\n"
+              "or failed during apply.\n\n"
+              f"[View Run]({run_url})"
+          )
+
+          payload = {
+              "chat_id": chat_id,
+              "message_thread_id": topic_id,
+              "parse_mode": "Markdown",
+              "text": text
+          }
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Telegram OK: HTTP {resp.status}")
+          except urllib.request.HTTPError as e:
+              print(f"Telegram error: {e.read().decode()}", file=sys.stderr)
+          PYEOF
+
+  # =============================================================================
+  # JOB 4: POST-DEPLOY VERIFY - Health checks & Telegram result to topic 236
+  # =============================================================================
+  post-deploy-verify:
+    name: "✅ Post-Deploy Verify"
+    runs-on: ubuntu-latest
+    needs: [filter, terraform-apply]
+    if: |
+      needs.terraform-apply.outputs.tf_apply_status == 'success' ||
+      github.event.inputs.force_verify == 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+          pip install boto3 requests
+
+      - name: "🏥 Run infrastructure health check"
+        id: health-check
+        run: |
+          python scripts/infra_health_check.py \
+            --api-url "${{ needs.terraform-apply.outputs.api_gateway_url }}" \
+            --aws-region "${{ env.AWS_REGION }}" \
+            --table-name "${{ needs.terraform-apply.outputs.dynamodb_table }}" \
+            --verbose
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: "📊 Health check summary"
+        if: always()
+        run: |
+          echo "### Infrastructure Health Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ steps.health-check.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Checks Performed:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ API Gateway connectivity (HTTP 200/403 expected)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Lambda functions status (check availability)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ DynamoDB table accessible (read/write test)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ IAM permissions validation" >> $GITHUB_STEP_SUMMARY
+
+      # ----- Telegram: deployed and verified -----
+      - name: "🔔 Notify Telegram — Infrastructure Deployed & Verified ✅"
+        if: steps.health-check.outcome == 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID:  ${{ secrets.TELEGRAM_TOPIC_CORTEX_INFRA }}
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id  = os.environ["TELEGRAM_CHAT_ID"]
+          topic_id = int(os.environ["TELEGRAM_TOPIC_ID"])
+
+          repo    = "${{ github.repository }}"
+          branch  = "${{ github.ref_name }}"
+          actor   = "${{ github.actor }}"
+          api_url = "${{ needs.terraform-apply.outputs.api_gateway_url }}"
+          dynamo  = "${{ needs.terraform-apply.outputs.dynamodb_table }}"
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          text = (
+              "\u2705 *Infrastructure Deployed \u0026 Verified*\n\n"
+              f"*Repo:* `{repo}`\n"
+              f"*Branch:* `{branch}`\n"
+              f"*Applied by:* @{actor}\n\n"
+              f"\U0001f517 *API Gateway:* `{api_url}`\n"
+              f"\U0001f5c4\ufe0f *DynamoDB:* `{dynamo}`\n\n"
+              f"[View Run]({run_url})"
+          )
+
+          payload = {
+              "chat_id": chat_id,
+              "message_thread_id": topic_id,
+              "parse_mode": "Markdown",
+              "text": text
+          }
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Telegram OK: HTTP {resp.status}")
+          except urllib.request.HTTPError as e:
+              print(f"Telegram error: {e.read().decode()}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      # ----- Telegram: health check failed post-apply -----
+      - name: "🔔 Notify Telegram — Post-Deploy Health Check Failed ❌"
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID:  ${{ secrets.TELEGRAM_TOPIC_CORTEX_INFRA }}
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id  = os.environ["TELEGRAM_CHAT_ID"]
+          topic_id = int(os.environ["TELEGRAM_TOPIC_ID"])
+
+          repo    = "${{ github.repository }}"
+          branch  = "${{ github.ref_name }}"
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          text = (
+              "\u274c *Post-Deploy Health Check Failed*\n\n"
+              f"*Repo:* `{repo}`\n"
+              f"*Branch:* `{branch}`\n\n"
+              "Terraform apply succeeded but infrastructure\n"
+              "health verification failed. Manual review required.\n\n"
+              f"[View Run]({run_url})"
+          )
+
+          payload = {
+              "chat_id": chat_id,
+              "message_thread_id": topic_id,
+              "parse_mode": "Markdown",
+              "text": text
+          }
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Telegram OK: HTTP {resp.status}")
+          except urllib.request.HTTPError as e:
+              print(f"Telegram error: {e.read().decode()}", file=sys.stderr)
+          PYEOF
+
+  # =============================================================================
+  # JOB 5: FRONTEND NOTIFICATION - Visibility for frontend changes
+  # =============================================================================
+  frontend-notify:
+    name: "📱 Frontend Change Detected"
+    runs-on: ubuntu-latest
+    needs: filter
+    if: needs.filter.outputs.frontend == 'true'
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "📢 Frontend notification"
+        id: frontend-notify
+        run: |
+          echo "📢 Frontend Change Notification"
+          echo "=========================================="
+          echo "Frontend code changes detected!"
+          echo "AWS Amplify will handle deployment automatically."
+          echo "This pipeline will NOT run infrastructure tasks."
+          echo "=========================================="
+          echo ""
+          echo "Handoff to AWS Amplify:"
+          echo "- App rebuild triggered"
+          echo "- Live preview generated"
+          echo "- Production deployment on main branch"
+          echo ""
+          echo "GitHub Webhook Status: $(curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/${{ github.repository }} 2>/dev/null || echo 'unknown')"
+
+      - name: "💬 Comment on PR"
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📱 Frontend Changes Detected\n\n✅ AWS Amplify will automatically handle:\n- **Build**: Compile React/Vite app\n- **Preview**: Generate live preview URL\n- **Deploy**: Push to production (if main branch)\n\nNo infrastructure changes detected. Skipping Terraform tasks.\n\n🔗 [View Amplify Console](https://console.aws.amazon.com/amplify/)`
+            });
+
+      - name: "🔔 Notify Telegram"
+        env:
+          TELEGRAM_TOPIC_AUTO_REMEDIATOR: ${{ secrets.TELEGRAM_TOPIC_AUTO_REMEDIATOR }}
+        run: |
+          CURL_DATA="{\"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\", \"text\": \"📱 Frontend changes detected\\n🔄 AWS Amplify deployment in progress...\\n📊 ${{ github.ref }}\"}"
+          if [ -n "$TELEGRAM_TOPIC_AUTO_REMEDIATOR" ]; then
+            CURL_DATA="{\"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\", \"message_thread_id\": $TELEGRAM_TOPIC_AUTO_REMEDIATOR, \"text\": \"📱 Frontend changes detected\\n🔄 AWS Amplify deployment in progress...\\n📊 ${{ github.ref }}\"}"
+          fi
+          curl -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$CURL_DATA" \
+            https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage || true
+
+  # =============================================================================
+  # JOB 6: FINAL SUMMARY - Overview of pipeline execution
+  # =============================================================================
+  summary:
+    name: "📊 Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [filter, terraform-plan, terraform-apply, post-deploy-verify, frontend-notify]
+    if: always()
+    steps:
+      - name: "📈 Generate execution report"
+        run: |
+          echo "## 🧠 CORTEX Smart Pipeline - Execution Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Detected Changes" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Changed | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure (Plan)   | ${{ needs.filter.outputs.infra }} | ${{ needs.terraform-plan.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure (Apply)  | ${{ needs.filter.outputs.infra }} | ${{ needs.terraform-apply.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure (Verify) | ${{ needs.filter.outputs.infra }} | ${{ needs.post-deploy-verify.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend                | ${{ needs.filter.outputs.frontend }} | ${{ needs.frontend-notify.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Terraform Changes" >> $GITHUB_STEP_SUMMARY
+          echo "- Has changes: \`${{ needs.terraform-plan.outputs.has_changes }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Resources: +${{ needs.terraform-plan.outputs.resources_add }} ~${{ needs.terraform-plan.outputs.resources_change }} -${{ needs.terraform-plan.outputs.resources_destroy }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Outputs" >> $GITHUB_STEP_SUMMARY
+          echo "- **API Gateway**: ${{ needs.terraform-apply.outputs.api_gateway_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **DynamoDB**: ${{ needs.terraform-apply.outputs.dynamodb_table }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow**: [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+
+      - name: "✅ Status check"
+        run: |
+          echo "Pipeline execution completed!"
+          echo "Infrastructure plan:   ${{ needs.terraform-plan.outcome }}"
+          echo "Infrastructure apply:  ${{ needs.terraform-apply.outcome }}"
+          echo "Infrastructure verify: ${{ needs.post-deploy-verify.outcome }}"
+          echo "Frontend notification: ${{ needs.frontend-notify.outcome }}"

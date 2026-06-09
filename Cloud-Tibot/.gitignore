@@ -1,0 +1,90 @@
+# Terraform state files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Terraform variable files (contains secrets)
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform directory
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+tfplan-*
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.*
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfplan
+infrastructure/terraform/tfplan-*
+
+# Lambda deployment packages
+*.zip
+src/**/node_modules/
+src/**/__pycache__/
+src/**/*.pyc
+src/**/build/
+src/**/dist/
+
+# Build artifacts
+build/
+*.egg-info/
+dist/
+.eggs/
+
+# Tests
+tests/**/*.pyc
+tests/**/__pycache__/
+
+# Local development
+.env
+.env.local
+tfplan-*
+test-auth.json
+monitor.ps1
+*.log
+
+# Temporary/backup files
+_remote_*.yml
+_old_*/
+_temp_*.json
+_check_*.yml
+
+# Test payloads and responses
+test-*.json
+lambda-response*.json
+*-response.json
+
+# Python
+*.egg-info/
+dist/
+.Python
+*.egg
+
+# AWS
+.aws/
+credentials
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform plan files
+infrastructure/terraform/tfplan

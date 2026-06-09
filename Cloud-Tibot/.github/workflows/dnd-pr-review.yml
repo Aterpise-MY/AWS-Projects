@@ -1,0 +1,351 @@
+name: 🤖 DND PR AI Review + Telegram Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, staging, develop]
+  pull_request_review_comment:
+    types: [created]
+
+concurrency:
+  group: dnd-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # JOB 1: AI-Powered Code Review
+  # ============================================================================
+  ai-code-review:
+    name: 🧠 AI Code Review (GitHub Models)
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      models: read
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install Python Dependencies
+        run: |
+          pip install PyGithub requests
+
+      - name: 🤖 Run AI Code Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'openai/gpt-4.1' }}
+        run: |
+          cat << 'PYEOF' > ai_review.py
+          import os
+          import json
+          import requests
+          from github import Github
+
+          def call_github_model(prompt: str, model: str) -> str:
+              """Call GitHub Models inference API."""
+              url = "https://models.github.ai/inference/chat/completions"
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              }
+              payload = {
+                  "model": model,
+                  "messages": [
+                      {
+                          "role": "system",
+                          "content": (
+                              "You are a senior software engineer reviewing code for a D&D 5e SaaS platform. "
+                              "The stack includes React 19, TypeScript, Vite, Supabase, AWS Lambda (Python), "
+                              "Terraform, and Google Gemini AI. Be concise and constructive."
+                          ),
+                      },
+                      {"role": "user", "content": prompt},
+                  ],
+                  "temperature": 0.3,
+                  "max_tokens": 1024,
+              }
+              resp = requests.post(url, headers=headers, json=payload, timeout=60)
+              resp.raise_for_status()
+              data = resp.json()
+              return data["choices"][0]["message"]["content"]
+
+          def main():
+              model_name = os.environ.get("AI_MODEL", "openai/gpt-4.1")
+
+              # Initialize GitHub API for PR data
+              g = Github(os.environ["GITHUB_TOKEN"])
+              repo = g.get_repo(os.environ["GITHUB_REPOSITORY"])
+              pr = repo.get_pull(int(os.environ["PR_NUMBER"]))
+              files = list(pr.get_files())[:10]
+
+              review_comments = []
+
+              for file in files:
+                  if not file.patch:
+                      continue
+
+                  patch = file.patch[:4000]
+                  prompt = f"""Review this code change:
+
+          File: {file.filename}
+          Changes:
+          ```
+          {patch}
+          ```
+
+          Provide a concise code review focusing on:
+          1. 🐛 Bugs or potential issues
+          2. 🔒 Security vulnerabilities
+          3. ⚡ Performance concerns
+          4. 🎯 Best practices violations
+          5. 🧪 Missing tests
+
+          Format: Line-by-line feedback in markdown. Be constructive and specific."""
+
+                  try:
+                      review_text = call_github_model(prompt, model_name)
+                      review_comments.append(f"## 📄 {file.filename}\n\n{review_text}\n")
+                  except Exception as e:
+                      print(f"Error reviewing {file.filename}: {e}")
+
+              # Post review as PR comment
+              if review_comments:
+                  comment_body = f"## 🤖 AI Code Review (`{model_name}` via GitHub Models API)\n\n"
+                  comment_body += "\n".join(review_comments)
+                  comment_body += "\n\n---\n*Automated review by DND Platform CI/CD*"
+                  pr.create_issue_comment(comment_body)
+                  print("✅ AI review posted!")
+              else:
+                  print("⚠️ No reviews generated")
+
+          main()
+          PYEOF
+
+          python ai_review.py
+        continue-on-error: true
+      
+      - name: 📊 Generate PR Stats
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr view ${{ github.event.pull_request.number }} --json additions,deletions,files > pr_stats.json
+          cat pr_stats.json
+
+  # ============================================================================
+  # JOB 2: Lambda Function Impact Analysis
+  # ============================================================================
+  lambda-impact-analysis:
+    name: ⚡ Lambda Impact Analysis
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.title, 'lambda') || contains(github.event.pull_request.changed_files, 'infrastructure/lambda_src')
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🔍 Detect Changed Lambda Functions
+        id: detect_lambda
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          CHANGED_LAMBDAS=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep "infrastructure/lambda_src" | cut -d'/' -f3 | sort -u || true)
+          echo "Changed Lambda functions:"
+          echo "$CHANGED_LAMBDAS"
+          echo "lambdas<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_LAMBDAS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: 📊 Lambda Code Complexity
+        run: |
+          pip install radon
+          for lambda_dir in infrastructure/lambda_src/*/; do
+            echo "📂 Analyzing $(basename $lambda_dir)..."
+            radon cc "$lambda_dir" -a || echo "⚠️ Analysis skipped"
+          done
+        continue-on-error: true
+      
+      - name: 💬 Comment Lambda Changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const lambdas = `${{ steps.detect_lambda.outputs.lambdas }}`.split('\n').filter(Boolean);
+            
+            if (lambdas.length > 0) {
+              const body = `## ⚡ Lambda Function Impact Analysis
+              
+              **Changed Functions:** ${lambdas.length}
+              ${lambdas.map(l => `- \`${l}\``).join('\n')}
+              
+              ⚠️ **Action Required:**
+              1. Test Lambda functions locally
+              2. Update integration tests
+              3. Verify IAM permissions
+              4. Check CloudWatch logs after deployment
+              
+              📖 See [Lambda Testing Guide](../infrastructure/README.md)`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            }
+
+  # ============================================================================
+  # JOB 3: Terraform Plan Preview
+  # ============================================================================
+  terraform-plan:
+    name: 📋 Terraform Plan Preview
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.changed_files, 'infrastructure/*.tf')
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+      
+      - name: 🏗️ Terraform Plan
+        working-directory: infrastructure
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_supabase_jwt_secret: ${{ secrets.SUPABASE_JWT_SECRET }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          terraform init
+          terraform plan -no-color > plan.txt
+          echo "📋 Terraform plan generated"
+      
+      - name: 💬 Post Plan Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('infrastructure/plan.txt', 'utf8');
+            const truncatedPlan = plan.length > 65000 ? plan.substring(0, 65000) + '\n\n... (truncated)' : plan;
+            
+            const body = `## 🏗️ Terraform Plan
+            
+            <details>
+            <summary>📋 Click to view plan</summary>
+            
+            \`\`\`terraform
+            ${truncatedPlan}
+            \`\`\`
+            
+            </details>
+            
+            ⚠️ Review changes carefully before merging!`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # ============================================================================
+  # JOB 4: Telegram Bot Integration
+  # ============================================================================
+  telegram-pr-notification:
+    name: 📱 Telegram PR Alert
+    runs-on: ubuntu-latest
+    needs: [ai-code-review]
+    if: always()
+    
+    steps:
+      - name:  Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_PR_GUARDIAN: ${{ secrets.TELEGRAM_TOPIC_PR_GUARDIAN }}
+        run: |
+          STATUS="${{ needs.ai-code-review.result == 'success' && '✅' || '⚠️' }}"
+          
+          MESSAGE="🎲 *DND Platform - Pull Request*%0A%0A"
+          MESSAGE+="*PR #${{ github.event.pull_request.number }}*: ${{ github.event.pull_request.title }}%0A"
+          MESSAGE+="👤 Author: @${{ github.event.pull_request.user.login }}%0A"
+          MESSAGE+="🔗 [View PR](${{ github.event.pull_request.html_url }})%0A%0A"
+          MESSAGE+="*Changes:*%0A"
+          MESSAGE+="➕ Additions: ${{ github.event.pull_request.additions }}%0A"
+          MESSAGE+="➖ Deletions: ${{ github.event.pull_request.deletions }}%0A"
+          MESSAGE+="📁 Files: ${{ github.event.pull_request.changed_files }}%0A%0A"
+          MESSAGE+="*AI Review:* $STATUS ${{ needs.ai-code-review.result }}%0A%0A"
+          MESSAGE+="🔍 Review in GitHub to approve/comment"
+          
+          # Build curl command with optional topic routing
+          CURL_ARGS="-d chat_id=${TELEGRAM_CHAT_ID} -d text=${MESSAGE} -d parse_mode=Markdown -d disable_web_page_preview=true"
+          if [ -n "${TELEGRAM_TOPIC_PR_GUARDIAN}" ]; then
+            CURL_ARGS="${CURL_ARGS} -d message_thread_id=${TELEGRAM_TOPIC_PR_GUARDIAN}"
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" ${CURL_ARGS}
+
+  # ============================================================================
+  # JOB 5: Auto-Label PR
+  # ============================================================================
+  auto-label:
+    name: 🏷️ Auto-Label PR
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🏷️ Add Labels Based on Changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            
+            const labels = new Set();
+            
+            files.data.forEach(file => {
+              if (file.filename.includes('infrastructure/')) labels.add('infrastructure');
+              if (file.filename.includes('lambda_src/')) labels.add('lambda');
+              if (file.filename.includes('.tf')) labels.add('terraform');
+              if (file.filename.includes('src/') || file.filename.includes('components/')) labels.add('frontend');
+              if (file.filename.includes('supabase/')) labels.add('supabase');
+              if (file.filename.includes('test')) labels.add('tests');
+              if (file.filename.includes('.md')) labels.add('documentation');
+            });
+            
+            if (labels.size > 0) {
+              github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: Array.from(labels)
+              });
+            }

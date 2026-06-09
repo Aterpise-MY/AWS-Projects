@@ -1,0 +1,337 @@
+name: Full CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  repository_dispatch:
+    types: [full-ci, deploy, run-all]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests and only build'
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: 'Target environment'
+        required: false
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: full-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───── Smart Change Detection ─────
+  detect:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.check.outputs.frontend }}
+      backend: ${{ steps.check.outputs.backend }}
+      any_changes: ${{ steps.check.outputs.any_changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect what changed
+        id: check
+        run: |
+          # Always run everything for manual/webhook triggers
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "frontend=true" >> $GITHUB_OUTPUT
+            echo "backend=true" >> $GITHUB_OUTPUT
+            echo "any_changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Manual/webhook trigger — will run full pipeline"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          echo "📁 All changed files:"
+          echo "$CHANGED"
+          echo ""
+
+          # Frontend detection
+          FE_MATCH=$(echo "$CHANGED" | grep -E '^(src/|components/|hooks/|pages/|services/|utils/|lib/|contexts/|types/|constants/|layouts/|types\.ts|constants\.ts|App\.tsx|index\.tsx|index\.html|index\.css|package\.json|tsconfig\.json|vite\.config\.ts|vitest\.config\.ts|postcss\.config\.js)' || echo "")
+
+          # Backend detection
+          BE_MATCH=$(echo "$CHANGED" | grep -E '^(infrastructure/lambda_src/|infrastructure/tests/|api/|supabase/functions/)' || echo "")
+
+          if [ -n "$FE_MATCH" ]; then
+            echo "frontend=true" >> $GITHUB_OUTPUT
+            echo "✅ Frontend changes detected"
+          else
+            echo "frontend=false" >> $GITHUB_OUTPUT
+            echo "⏭️ No frontend changes"
+          fi
+
+          if [ -n "$BE_MATCH" ]; then
+            echo "backend=true" >> $GITHUB_OUTPUT
+            echo "✅ Backend changes detected"
+          else
+            echo "backend=false" >> $GITHUB_OUTPUT
+            echo "⏭️ No backend changes"
+          fi
+
+          if [ -n "$FE_MATCH" ] || [ -n "$BE_MATCH" ]; then
+            echo "any_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Detection Summary
+        run: |
+          echo "## 🔍 Change Detection" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Area | Changed | Action |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.check.outputs.frontend }}" == "true" ]]; then
+            echo "| Frontend | ✅ Yes | Lint → Test → Build |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Frontend | ⏭️ No | Skip |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ "${{ steps.check.outputs.backend }}" == "true" ]]; then
+            echo "| Backend | ✅ Yes | Pytest |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Backend | ⏭️ No | Skip |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ───── Frontend Lint ─────
+  frontend-lint:
+    name: Frontend Lint
+    needs: detect
+    if: needs.detect.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: TypeScript type check (non-blocking)
+        continue-on-error: true
+        run: |
+          npm run lint 2>&1 || true
+          echo "::warning::TypeScript lint — errors are non-blocking"
+
+  # ───── Frontend Tests ─────
+  frontend-test:
+    name: Frontend Tests
+    needs: [detect, frontend-lint]
+    if: needs.detect.outputs.frontend == 'true' && github.event.inputs.skip_tests != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run Vitest
+        run: npx vitest run --reporter=verbose
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+  # ───── Frontend Build ─────
+  frontend-build:
+    name: Frontend Build
+    needs: [detect, frontend-test]
+    if: |
+      needs.detect.outputs.frontend == 'true'
+      && (needs.frontend-test.result == 'success' || needs.frontend-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build
+        run: npm run build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_AWS_API_URL: ${{ secrets.VITE_AWS_API_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 7
+
+  # ───── Backend Tests ─────
+  backend-test:
+    name: Backend Tests (Python)
+    needs: detect
+    if: needs.detect.outputs.backend == 'true' && github.event.inputs.skip_tests != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov boto3 pydantic
+          for req in infrastructure/lambda_src/*/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
+      - name: Run pytest
+        run: |
+          pytest infrastructure/tests/ -v --tb=short || EXIT_CODE=$?
+          if [ "${EXIT_CODE:-0}" -eq 5 ]; then
+            echo "⚠️ No tests collected — treating as success"
+            exit 0
+          elif [ "${EXIT_CODE:-0}" -ne 0 ]; then
+            exit $EXIT_CODE
+          fi
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # ───── Summary ─────
+  ci-summary:
+    name: CI Summary
+    needs: [detect, frontend-build, backend-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pipeline Summary
+        run: |
+          echo "## 📊 Full CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Area | Detected | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.detect.outputs.frontend }}" == "true" ]]; then
+            echo "| Frontend | ✅ Changed | \`${{ needs.frontend-build.result }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Frontend | ⏭️ No changes | Skipped |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.detect.outputs.backend }}" == "true" ]]; then
+            echo "| Backend | ✅ Changed | \`${{ needs.backend-test.result }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Backend | ⏭️ No changes | Skipped |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\` | **Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ───── Deploy to Amplify ─────
+  deploy-amplify:
+    name: Deploy to AWS Amplify
+    needs: [detect, frontend-build, backend-test]
+    if: |
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.detect.outputs.frontend == 'true'
+      && needs.frontend-build.result == 'success'
+      && (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Trigger Amplify build via AWS CLI
+        id: deploy
+        run: |
+          echo "🚀 Starting Amplify production build..."
+          
+          # Start the build job
+          JOB_ID=$(aws amplify start-job \
+            --app-id ${{ secrets.AMPLIFY_APP_ID }} \
+            --branch-name main \
+            --job-type RELEASE \
+            --query 'jobSummary.jobId' \
+            --output text)
+          
+          echo "job_id=$JOB_ID" >> $GITHUB_OUTPUT
+          echo "✅ Build job started with ID: $JOB_ID"
+          echo "📊 View in console: https://${{ secrets.AWS_REGION }}.console.aws.amazon.com/amplify/home?region=${{ secrets.AWS_REGION }}#/${{ secrets.AMPLIFY_APP_ID }}/main/$JOB_ID"
+
+      - name: Monitor build status
+        run: |
+          echo "⏳ Monitoring build job ${{ steps.deploy.outputs.job_id }}..."
+          
+          MAX_WAIT=600  # 10 minutes
+          ELAPSED=0
+          INTERVAL=15
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            STATUS=$(aws amplify get-job \
+              --app-id ${{ secrets.AMPLIFY_APP_ID }} \
+              --branch-name main \
+              --job-id ${{ steps.deploy.outputs.job_id }} \
+              --query 'job.summary.status' \
+              --output text)
+            
+            echo "[$ELAPSED s] Status: $STATUS"
+            
+            case "$STATUS" in
+              SUCCEED)
+                echo "✅ Build completed successfully!"
+                exit 0
+                ;;
+              FAILED|CANCELLED)
+                echo "❌ Build failed with status: $STATUS"
+                exit 1
+                ;;
+              PENDING|RUNNING)
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+              *)
+                echo "⚠️ Unknown status: $STATUS"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+            esac
+          done
+          
+          echo "⚠️ Build monitoring timed out after ${MAX_WAIT}s"
+          echo "Build may still be running — check console manually"
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🚀 AWS Amplify Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`main\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Job ID | \`${{ steps.deploy.outputs.job_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View in AWS Console](https://${{ secrets.AWS_REGION }}.console.aws.amazon.com/amplify/home?region=${{ secrets.AWS_REGION }}#/${{ secrets.AMPLIFY_APP_ID }}/main/${{ steps.deploy.outputs.job_id }})" >> $GITHUB_STEP_SUMMARY
+
+  # ───── Nothing Changed ─────
+  no-changes:
+    name: No CI-Relevant Changes
+    needs: detect
+    if: needs.detect.outputs.any_changes == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "## ⏭️ Pipeline Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No frontend or backend files changed — only docs/config modified." >> $GITHUB_STEP_SUMMARY

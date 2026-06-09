@@ -1,0 +1,28 @@
+Repository Analysis Summary for CORTEX ChatOps System:
+
+TECH STACK DETECTED:
+- AWS Lambda (Python 3.11) - 4 modules
+- Terraform (Infrastructure as Code) - 8 .tf files
+- GitHub Integration (Copilot SDK, PyGithub)
+- Telegram Bot (ChatOps)
+- OpenAI & AWS Services (EventBridge, DynamoDB, API Gateway)
+
+CURRENT STRUCTURE ISSUES:
+- 45 files in root directory (should be <15)
+- 21 markdown documentation files in root (cluttered)
+- 15 configuration files in root
+- No dedicated tests/ directory (test payloads scattered)
+- 1 backup file (terraform.tfstate.backup) should be deleted
+- Mixed naming conventions (UPPER_CASE.md vs snake_case)
+
+TECH DEBT SCORE: 12/20 (High - significant refactoring needed)
+
+RECOMMENDATION REQUEST:
+Suggest an enterprise-grade folder structure for this AWS Lambda + Terraform ChatOps system that:
+1. Organizes infrastructure code (Terraform) separately
+2. Keeps Lambda modules clean and testable
+3. Consolidates all documentation into docs/
+4. Separates test payloads and scripts properly
+5. Follows AWS Lambda + IaC best practices
+6. Maintains deployment scripts accessibility
+7. Reduces root directory clutter to <15 files
