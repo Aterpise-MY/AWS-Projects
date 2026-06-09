@@ -33,14 +33,14 @@ SSM Session Manager.
 
 ```
                     ┌─────────────────────────────────────┐
-                    │              Internet                │
+                    │              Internet               │
                     └──────────────────┬──────────────────┘
                                        │
                     ┌──────────────────▼──────────────────┐
-                    │     Network Load Balancer (NLB)      │
-                    │  TCP 80  •  TLS 443 (if ACM set)     │
-                    │  internet-facing  •  cross-zone LB   │
-                    └──────────┬────────────────┬──────────┘
+                    │     Network Load Balancer (NLB)     │
+                    │  TCP 80  •  TLS 443 (if ACM set)    │
+                    │  internet-facing  •  cross-zone LB  │
+                    └──────────┬────────────────┬─────────┘
                                │                │
           ┌────────────────────▼──┐        ┌────▼──────────────────┐
           │      us-east-1a       │        │      us-east-1b       │
