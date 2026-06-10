@@ -38,9 +38,13 @@ AWS Cost Anomaly Detection
 ✅ **Real-time Cost Alerts** — Auto schedule notifications for every morning
 
 ✅ **Cost History Tracking** — DynamoDB stores all cost events for trend analysis  
+
 ✅ **Anomaly Detection** — AWS native Cost Anomaly Detection service  
+
 ✅ **Customizable Thresholds** — Set alert sensitivity via Terraform variables  
+
 ✅ **Telegram Integration** — Formatted messages with cost details  
+
 ✅ **Production-Ready** — Least privilege IAM, encryption, logging  
 
 ## Prerequisites
