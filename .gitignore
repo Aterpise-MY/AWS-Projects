@@ -78,3 +78,8 @@ config.py
 # Test files with credentials
 test_credentials.py
 test_secrets.py
+Resume/1_ALB_Auto_Scaling.md
+Resume/2_NLB_Auto_Scaling.md
+.gitignore
+Resume/4_Multi_Tier_Web_App.md
+Resume/3_Cloud_Tibot.md

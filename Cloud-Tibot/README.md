@@ -1,405 +1,364 @@
-# Project Cloud Tibot - Serverless ChatOps on AWS
+# FinOps Sentinel - AWS Cost Optimization Alerts
 
-Production-ready Terraform configuration for deploying a serverless ChatOps system integrating Telegram, GitHub, and AWS Amplify monitoring.
+Serverless Lambda function that monitors AWS cost anomalies and sends real-time alerts to Telegram for cost optimization notifications.
 
-## 🚀 NEW: Complete CI/CD System with AI-Powered Reviews
+## Overview
 
-**⭐ Latest Addition**: Comprehensive GitHub Actions workflows with AI-powered code reviews, Telegram notifications, and optional Copilot SDK integration for the IB-DND-5e-Platform project!
+FinOps Sentinel is a lightweight, serverless cost monitoring solution that detects unusual AWS spending patterns and sends instant alerts to your Telegram chat. It integrates with AWS services via EventBridge and DynamoDB to track cost anomalies without manual intervention.
 
-### What's Included:
+## Architecture
 
-✅ **3x GitHub Actions Workflows** - Continuous Integration, PR Review, Production Deployment  
-✅ **Telegram Bot Integration** - Real-time notifications with interactive buttons  
-✅ **AI Code Reviews** - Powered by Gemini 1.5 Pro  
-✅ **Copilot SDK Integration** - Optional advanced custom agents for specialized reviews  
-✅ **Complete Documentation** - 3000+ lines covering setup, deployment, and best practices  
-
-### Quick Links:
- 
-⚡ **[docs/setup/QUICK_START_30MIN.md](docs/setup/QUICK_START_30MIN.md)** - Deploy in 30 minutes  
-📊 **[docs/architecture/COMPLETE_SYSTEM_SUMMARY.md](docs/architecture/COMPLETE_SYSTEM_SUMMARY.md)** - Complete system overview  
-🤖 **[docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md](docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md)** - Copilot SDK guide (750+ lines)  
-📚 **[docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md](docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md)** - Complete guide (850+ lines)
-
-### System Features:
-
-- **CI Workflow**: Validates frontend, Lambda functions, Terraform, security scanning (~7 min)
-- **PR Review**: AI-powered analysis, auto-labeling, Terraform plan preview (~5 min)
-- **Deploy Workflow**: Infrastructure, Lambda functions, Supabase, frontend, smoke tests (~12 min)
-- **Telegram Bot**: PR notifications, deployment alerts, interactive buttons
-- **Cost**: ~$3/month basic or ~$8/month with Copilot SDK enhancement
-
----
-
-## Architecture Overview
-
-**Project CORTEX** consists of three Lambda-based modules:
-
-1. **Auto-Remediator (Module 1)**: Monitors AWS Amplify build failures via EventBridge and sends notifications
-2. **Git Radar (Module 2)**: Processes GitHub webhooks and maintains a Telegram dashboard with DynamoDB state
-3. **FinOps Sentinel (Module 3)**: Handles cost optimization alerts and financial operations notifications
+```
+AWS Cost Anomaly Detection
+         │
+         ▼
+    EventBridge (Triggers on cost anomalies)
+         │
+         ▼
+   Lambda Function (FinOps Sentinel)
+    └─ Analyzes cost data
+    └─ Stores history in DynamoDB
+    └─ Sends alert to Telegram
+         │
+         ▼
+   Telegram Chat (Real-time notification)
+```
 
 ## Infrastructure Components
 
-- **3x Lambda Functions** (Python 3.11)
-- **API Gateway v2** (HTTP API with 2 routes)
-- **DynamoDB Table** (On-demand billing)
-- **EventBridge Rule** (Amplify monitoring)
-- **IAM Roles & Policies** (Least privilege)
-- **CloudWatch Log Groups** (14-day retention)
+- **Lambda Function** (Python 3.11) — Cost anomaly analyzer and Telegram notifier
+- **API Gateway v2** (HTTP API) — Webhook endpoint for cost alerts
+- **DynamoDB Table** (On-demand) — Stores cost history and anomaly records
+- **EventBridge Rule** — Triggers Lambda on cost anomalies
+- **IAM Role** — Least privilege permissions for Lambda
+- **CloudWatch Logs** — All execution logs (14-day retention)
+
+## Features
+
+✅ **Real-time Cost Alerts** — Instant Telegram notifications when anomalies detected  
+✅ **Cost History Tracking** — DynamoDB stores all cost events for trend analysis  
+✅ **Anomaly Detection** — AWS native Cost Anomaly Detection service  
+✅ **Customizable Thresholds** — Set alert sensitivity via Terraform variables  
+✅ **Telegram Integration** — Formatted messages with cost details  
+✅ **Production-Ready** — Least privilege IAM, encryption, logging  
 
 ## Prerequisites
 
-- Terraform >= 1.5.0
-- AWS CLI configured with appropriate credentials
-- Telegram Bot Token and Chat ID
-- **GitHub App** with Copilot: Read permission (REQUIRED - see setup below)
-- Python 3.11 Lambda source code in `src/module1`, `src/module2`, `src/module3`
-- Node.js 18+ (for GitHub Actions workflows)
-- PowerShell 7+ (for setup scripts)
+- **Terraform** >= 1.5.0
+- **AWS Account** with Cost Anomaly Detection enabled
+- **Telegram Bot Token** (create with @BotFather)
+- **Telegram Chat ID** (your chat ID)
+- **AWS CLI** configured with credentials
 
-## 🎯 Quick Start: CI/CD System Deployment
+## Quick Start
 
-### For IB-DND-5e-Platform Project:
+### 1. Create Telegram Bot
 
-**Time**: 30 minutes | **Cost**: $3-8/month | **Setup**: Automated scripts provided
+1. Open Telegram and chat with @BotFather
+2. Send `/newbot`
+3. Follow prompts to create your bot
+4. Save the bot token (looks like `123456789:ABCdefGHIjklmNOpqrsTUVwxyz`)
+5. Get your Chat ID by sending `/getids` to @userinfobot
 
-1. **Open** [docs/setup/QUICK_START_30MIN.md](docs/setup/QUICK_START_30MIN.md)
-2. **Create** Telegram bot with @BotFather
-3. **Copy** workflow files to your repo
-4. **Run** `infrastructure/scripts/setup-github-actions.ps1` to configure secrets
-5. **Test** with first pull request
-
-**What you get:**
-- ✅ Automated CI/CD for every commit
-- ✅ AI-powered code reviews on PRs
-- ✅ Real-time Telegram notifications
-- ✅ Production deployment automation
-- ✅ Security scanning and compliance
-
-**Need help?** Start with [docs/INDEX.md](docs/INDEX.md) for the complete reading guide.
-
----
-
----
-
-## 📚 CI/CD Documentation & Guides
-
-Complete documentation for the GitHub Actions CI/CD system has been created to help you deploy, understand, and customize the automation system.
-
-### Reading Paths by Goal:
-
-| Goal | Documents | Time |
-|------|-----------|------|
-| **Deploy Immediately** | [docs/setup/QUICK_START_30MIN.md](docs/setup/QUICK_START_30MIN.md) | 30 min |
-| **Understand System** | [docs/architecture/COMPLETE_SYSTEM_SUMMARY.md](docs/architecture/COMPLETE_SYSTEM_SUMMARY.md) + [docs/integration/GITHUB_ACTIONS_SUMMARY.md](docs/integration/GITHUB_ACTIONS_SUMMARY.md) | 30 min |
-| **Learn Workflows** | [docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md](docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md) | 45 min |
-| **Add Copilot SDK** | [docs/integration/COPILOT_SDK_QUICK_START.md](docs/integration/COPILOT_SDK_QUICK_START.md) | 20 min |
-| **Deep Dive** | [docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md](docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md) | 60 min |
-
-### Documentation Overview:
-
-**[docs/INDEX.md](docs/INDEX.md)** - Master index with navigation  
-**[docs/setup/QUICK_START_30MIN.md](docs/setup/QUICK_START_30MIN.md)** - Step-by-step deployment guide  
-**[docs/architecture/COMPLETE_SYSTEM_SUMMARY.md](docs/architecture/COMPLETE_SYSTEM_SUMMARY.md)** - What was created and why  
-**[docs/integration/GITHUB_ACTIONS_SUMMARY.md](docs/integration/GITHUB_ACTIONS_SUMMARY.md)** - Quick reference for workflows  
-
-**[docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md](docs/integration/GITHUB_ACTIONS_TELEGRAM_GUIDE.md)** - Complete guide (850+ lines)
-- Workflow explanations
-- Telegram bot setup
-- GitHub secrets configuration
-- Troubleshooting guide
-
-**[docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md](docs/integration/GITHUB_COPILOT_SDK_INTEGRATION.md)** - Copilot SDK guide (750+ lines)
-- SDK architecture
-- Custom agents configuration
-- Implementation examples
-- Best practices
-
-**[docs/integration/COPILOT_SDK_QUICK_START.md](docs/integration/COPILOT_SDK_QUICK_START.md)** - Quick Copilot reference
-- Feature comparison
-- Migration paths
-- Integration instructions
-
-**[docs/deployment/DEPLOYMENT_CHECKLIST_GITHUB_ACTIONS.md](docs/deployment/DEPLOYMENT_CHECKLIST_GITHUB_ACTIONS.md)** - Complete checklist
-- Pre-deployment tasks
-- Post-deployment validation
-- Troubleshooting
-
-### System Components:
-
-| Component | Status | Type | Purpose |
-|-----------|--------|------|---------|
-| **dnd-platform-ci.yml** | ✅ Ready | Workflow | Continuous Integration (7 jobs, ~7 min) |
-| **dnd-pr-review.yml** | ✅ Ready | Workflow | AI Code Review (5 jobs, ~5 min) |
-| **dnd-deploy.yml** | ✅ Ready | Workflow | Production Deployment (7 jobs, ~12 min) |
-| **scripts/telegram_bot.py** | ✅ Ready | Script | Telegram notifications with buttons |
-| **infrastructure/scripts/setup-github-actions.ps1** | ✅ Ready | Script | Automated secret configuration |
-
----
-
-**Project CORTEX now uses GitHub App JWT authentication** for production-grade security.
-
-**What you need:**
-1. ✅ **GitHub App ID**
-2. ✅ **GitHub App Installation ID**
-3. ✅ **GitHub App Private Key** (.pem file)
-
-**Why GitHub App?**
-- ✅ No long-lived tokens (JWT expires every 10 minutes)
-- ✅ Production-ready and enterprise-grade
-- ✅ Granular permissions (Copilot: Read only)
-- ✅ Better audit trail and security
-
-**Setup Instructions:**
-📖 **Complete Setup Guide**: [docs/setup/GITHUB_APP_SETUP.md](docs/setup/GITHUB_APP_SETUP.md)
-
-**Quick Summary:**
-1. Create GitHub App at https://github.com/settings/apps
-2. Grant **Copilot: Read** permission (critical!)
-3. Install app to your account/org
-4. Copy: App ID, Installation ID, Private Key
-5. Update `terraform.tfvars` with credentials
-
-**Alternative Authentication Options** (for testing):
-- Option 2: OAuth token with `copilot` scope
-- Option 3: OpenAI API key (no GitHub Copilot required)
-
-See [docs/setup/COPILOT_AUTH_SETUP.md](docs/setup/COPILOT_AUTH_SETUP.md) for alternative methods.
-
-## Directory Structure
-
-```
-Cloud Tibot/
-├── 📄 README.md                              # This file
-├── 📄 INDEX.md                               # Master documentation index
-├── 📄 QUICK_START_30MIN.md                   # Deploy in 30 minutes
-├── 📄 COMPLETE_SYSTEM_SUMMARY.md             # Complete system overview
-├── 📄 GITHUB_ACTIONS_SUMMARY.md              # Quick reference
-├── 📄 DEPLOYMENT_CHECKLIST_GITHUB_ACTIONS.md # Step-by-step checklist
-│
-├── 🔄 GitHub Actions Workflows
-│   └── .github/workflows/
-│       ├── dnd-platform-ci.yml               # CI validation (7 jobs)
-│       ├── dnd-pr-review.yml                 # PR review with AI (5 jobs)
-│       └── dnd-deploy.yml                    # Production deployment (7 jobs)
-│
-├── 🤖 Telegram Integration
-│   └── scripts/
-│       └── telegram_bot.py                   # Complete bot implementation
-│
-├── 🛠️ Setup Tools
-│   └── setup-github-actions.ps1              # Automated secret configuration
-│
-├── 📚 Comprehensive Documentation
-│   └── docs/
-│       ├── GITHUB_ACTIONS_TELEGRAM_GUIDE.md         # Complete guide (850+ lines)
-│       ├── GITHUB_COPILOT_SDK_INTEGRATION.md        # Copilot SDK guide (750+ lines)
-│       ├── COPILOT_SDK_QUICK_START.md               # Quick Copilot reference
-│       └── DEPLOYMENT_CHECKLIST_GITHUB_ACTIONS.md   # Detailed checklist
-│
-├── 🏗️ Terraform Infrastructure
-│   ├── provider.tf                # AWS provider configuration
-│   ├── variables.tf               # Input variable definitions
-│   ├── terraform.tfvars           # Variable values
-│   ├── dynamodb.tf                # DynamoDB table
-│   ├── iam.tf                     # IAM roles and policies
-│   ├── lambda.tf                  # Lambda functions (3 modules)
-│   ├── api_gateway.tf             # HTTP API Gateway v2
-│   ├── eventbridge.tf             # EventBridge rules
-│   ├── outputs.tf                 # Output values
-│   └── .gitignore                 # Git ignore rules
-│
-└── 📦 Lambda Source Code
-    ├── src/module1/               # Auto-Remediator
-    │   ├── lambda_function.py
-    │   ├── copilot_agent.py
-    │   ├── requirements.txt
-    │   └── build/
-    ├── src/module2/               # Git Radar
-    │   ├── lambda_function.py
-    │   ├── copilot_agent.py
-    │   ├── requirements.txt
-    │   └── build/
-    ├── src/module3/               # FinOps Sentinel
-    │   ├── lambda_function.py
-    │   ├── copilot_agent.py
-    │   ├── requirements.txt
-    │   └── build/
-    └── src/module4_agent/         # PR Guardian Agent
-        ├── pr_guardian.py
-        ├── requirements.txt
-        └── build/
-```
-
-## Deployment Instructions
-
-### 1. Configure Variables
-
-Create a `terraform.tfvars` file from the example:
+### 2. Configure Terraform Variables
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edit `terraform.tfvars` with your actual values:
+Edit `terraform.tfvars`:
 
 ```hcl
 # Telegram Configuration
-telegram_token   = "your-telegram-bot-token"
-telegram_chat_id = "your-telegram-chat-id"
-
-# GitHub App Authentication (REQUIRED)
-github_app_id              = "123456"           # From GitHub App settings
-github_app_installation_id = "12345678"         # From installation URL
-github_app_private_key     = <<-EOT            # Entire .pem file content
------BEGIN RSA PRIVATE KEY-----
-YOUR_PRIVATE_KEY_CONTENT_HERE
------END RSA PRIVATE KEY-----
-EOT
-
-# Repository Settings
-github_repo_owner = "your-username-or-org"
-github_repo_name  = "your-repo-name"
+telegram_token   = "your-bot-token-here"
+telegram_chat_id = "your-chat-id-here"
 
 # AWS Configuration
 aws_region   = "us-east-1"
-project_name = "cortex"
+project_name = "finops"
 environment  = "prod"
+
+# Cost Alert Settings
+cost_anomaly_threshold = 100  # Alert if costs increase by 100% or more
 ```
 
-**⚠️ IMPORTANT**: Follow [docs/setup/GITHUB_APP_SETUP.md](docs/setup/GITHUB_APP_SETUP.md) to get these credentials!
-
-**Don't have a GitHub App yet?** See the complete setup guide with screenshots:
-📖 [docs/setup/GITHUB_APP_SETUP.md](docs/setup/GITHUB_APP_SETUP.md)
-
-### 2. Prepare Lambda Source Code
-
-Ensure your Python Lambda functions exist in the correct directories:
-
-```
-src/module1/lambda_function.py  # Auto-Remediator
-src/module2/lambda_function.py  # Git Radar
-src/module3/lambda_function.py  # FinOps Sentinel
-```
-
-Each should have a `lambda_handler` function:
-
-```python
-def lambda_handler(event, context):
-    # Your implementation
-    return {
-        'statusCode': 200,
-        'body': 'Success'
-    }
-```
-
-### 3. Initialize Terraform
+### 3. Deploy
 
 ```bash
 terraform init
-```
-
-### 4. Plan Infrastructure
-
-```bash
 terraform plan
-```
-
-Review the execution plan carefully.
-
-### 5. Deploy Infrastructure
-
-```bash
 terraform apply
 ```
 
-Type `yes` to confirm deployment.
+### 4. Test
 
-### 6. Retrieve API Endpoints
+Wait 5-10 minutes for AWS Cost Anomaly Detection to initialize, then trigger a test:
 
 ```bash
+# Invoke Lambda manually
+aws lambda invoke \
+  --function-name finops-sentinel \
+  --payload '{"test": true}' \
+  response.json
+```
+
+Check Telegram for test notification.
+
+## How It Works
+
+### Cost Anomaly Detection Flow
+
+1. **AWS Cost Explorer** monitors your spending patterns
+2. **Anomaly Detection** identifies unusual cost increases
+3. **EventBridge Rule** triggers on anomaly events
+4. **Lambda Function** receives the event
+5. **FinOps Sentinel** analyzes the cost data
+6. **DynamoDB** stores the anomaly record
+7. **Telegram Bot** sends instant alert to your chat
+
+### Alert Message Example
+
+```
+💰 AWS Cost Anomaly Detected!
+
+Service: Amazon EC2
+Cost Increase: +$450.00 (150% above normal)
+Current Cost: $750.00
+Normal Cost: $300.00
+
+⚠️ Action: Review EC2 instances and consider optimization
+```
+
+## Configuration
+
+### Terraform Variables
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `telegram_token` | string | — | Telegram bot token (required) |
+| `telegram_chat_id` | string | — | Telegram chat ID (required) |
+| `aws_region` | string | `us-east-1` | AWS region |
+| `project_name` | string | `finops` | Project name prefix |
+| `environment` | string | `prod` | Environment tag |
+| `lambda_timeout` | number | `60` | Lambda timeout in seconds |
+| `lambda_memory` | number | `256` | Lambda memory in MB |
+| `cost_anomaly_threshold` | number | `100` | Anomaly threshold percentage |
+
+## Deployment
+
+### Option 1: Full Terraform Deployment
+
+```bash
+# Step 1: Initialize Terraform
+terraform init
+
+# Step 2: Review changes
+terraform plan
+
+# Step 3: Deploy
+terraform apply -auto-approve
+
+# Step 4: Get outputs
 terraform output
 ```
 
-You'll receive:
-- `api_gateway_endpoint`: Base API URL
-- `github_webhook_url`: URL to configure in GitHub
-- `finops_webhook_url`: URL for FinOps integrations
+### Option 2: Manual AWS CLI
 
-## Post-Deployment Configuration
+```bash
+# Create IAM role
+aws iam create-role --role-name finops-lambda-role \
+  --assume-role-policy-document file://trust-policy.json
 
-### Configure GitHub Webhook
+# Create Lambda function
+aws lambda create-function \
+  --function-name finops-sentinel \
+  --runtime python3.11 \
+  --role arn:aws:iam::ACCOUNT_ID:role/finops-lambda-role \
+  --handler lambda_function.lambda_handler \
+  --zip-file fileb://lambda.zip
 
-1. Go to your GitHub repository → Settings → Webhooks
-2. Click "Add webhook"
-3. Set Payload URL to the `github_webhook_url` output
-4. Content type: `application/json`
-5. Select events: `Push`, `Pull request`, etc.
-6. Click "Add webhook"
+# Create DynamoDB table
+aws dynamodb create-table \
+  --table-name finops-cost-history \
+  --attribute-definitions AttributeName=anomaly_id,AttributeType=S \
+  --key-schema AttributeName=anomaly_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+```
 
-### Test EventBridge Integration
+## Lambda Function
 
-The Auto-Remediator will automatically trigger when any Amplify app build fails. To test:
+**Location:** `src/module3/lambda_function.py`
 
-1. Deploy an Amplify app
-2. Trigger a build failure
-3. Check CloudWatch Logs for Lambda execution
+### Handler Signature
+
+```python
+def lambda_handler(event, context):
+    """
+    Process cost anomaly events and send Telegram alerts.
+    
+    Args:
+        event: EventBridge event containing cost anomaly data
+        context: Lambda context object
+    
+    Returns:
+        dict: Status response
+    """
+    # Parse cost anomaly event
+    # Store in DynamoDB
+    # Format Telegram message
+    # Send notification
+    # Return success/failure
+```
+
+### Key Features
+
+- Parses EventBridge cost anomaly events
+- Extracts service name, cost increase percentage, amount
+- Stores anomaly record in DynamoDB with timestamp
+- Formats human-readable Telegram message
+- Sends instant notification via Telegram Bot API
+- Handles errors gracefully with CloudWatch logging
+
+## DynamoDB Schema
+
+**Table Name:** `finops-cost-history`
+
+**Attributes:**
+- `anomaly_id` (String, Partition Key) — Unique anomaly identifier
+- `timestamp` (Number) — Unix timestamp
+- `service` (String) — AWS service name (e.g., "Amazon EC2")
+- `cost_increase_percentage` (Number) — Percentage increase
+- `cost_increase_amount` (Number) — Dollar amount increase
+- `current_cost` (Number) — Current hourly/daily cost
+- `baseline_cost` (Number) — Normal cost
+- `message_sent` (Boolean) — Whether Telegram notification sent
+
+**TTL:** 90 days (automatic cleanup of old records)
+
+## Telegram Integration
+
+### Message Format
+
+Alerts are formatted with:
+- ⚠️ **Alert Icon** — Visual indicator
+- **Service Name** — Which AWS service
+- **Cost Increase** — Percentage and dollar amount
+- **Action Suggestion** — Recommended next step
+
+### Customization
+
+Edit the message template in `src/module3/lambda_function.py`:
+
+```python
+def format_message(anomaly):
+    return f"""
+💰 AWS Cost Anomaly Detected!
+
+Service: {anomaly['service']}
+Cost Increase: +${anomaly['cost_increase_amount']:.2f} ({anomaly['cost_increase_percentage']}%)
+Current Cost: ${anomaly['current_cost']:.2f}
+Baseline Cost: ${anomaly['baseline_cost']:.2f}
+
+⚠️ Action: Review {anomaly['service']} resources
+    """
+```
 
 ## Monitoring and Logs
 
-All Lambda functions log to CloudWatch:
+### CloudWatch Logs
+
+All Lambda executions logged to:
 
 ```bash
-# View logs for Auto-Remediator
-aws logs tail /aws/lambda/cortex_auto_remediator --follow
-
-# View logs for Git Radar
-aws logs tail /aws/lambda/cortex_git_radar --follow
-
-# View logs for FinOps Sentinel
-aws logs tail /aws/lambda/cortex_finops_sentinel --follow
+/aws/lambda/finops-sentinel
 ```
 
-## Updating Lambda Code
-
-After modifying Lambda source code:
+View logs:
 
 ```bash
-terraform apply -replace="aws_lambda_function.git_radar"
+# Real-time logs
+aws logs tail /aws/lambda/finops-sentinel --follow
+
+# Specific time range
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/finops-sentinel \
+  --start-time $(date -d '1 hour ago' +%s)000
 ```
 
-Or apply normally (Terraform detects code changes via hash):
+### Metrics
+
+CloudWatch automatically tracks:
+- **Invocations** — Number of anomalies detected
+- **Duration** — Lambda execution time (avg <2 seconds)
+- **Errors** — Failed notifications
+- **Throttles** — Rate limiting (none expected)
+
+## Cost Estimates
+
+**Monthly Cost Breakdown:**
+- **Lambda:** ~$0.50 (millions of free invocations)
+- **DynamoDB:** ~$0.30 (on-demand, <1GB)
+- **CloudWatch Logs:** ~$0.50 (14-day retention)
+- **EventBridge:** Free (AWS service events)
+- **Total:** ~$1.30/month
+
+## Security Considerations
+
+| Topic | Current Posture | Hardening |
+|-------|-----------------|-----------|
+| **Telegram Token** | In Terraform variables | Move to AWS Secrets Manager |
+| **DynamoDB Encryption** | Enabled (AWS managed keys) | Use customer-managed CMK |
+| **IAM Permissions** | Least privilege per Lambda | Regularly audit |
+| **CloudWatch Logs** | 14-day retention | Increase retention as needed |
+| **API Gateway CORS** | Restricted | Add IP whitelisting |
+| **Lambda Code** | Plain Python | Add input validation |
+
+### Production Hardening
 
 ```bash
-terraform apply
+# Store secrets in AWS Secrets Manager
+aws secretsmanager create-secret \
+  --name finops/telegram-token \
+  --secret-string "your-token"
+
+# Update Lambda to use secret
+# Edit src/module3/lambda_function.py to fetch from Secrets Manager
 ```
 
-## Cost Optimization
+## Troubleshooting
 
-This infrastructure uses:
-- **Lambda**: Pay per invocation (generous free tier)
-- **DynamoDB**: On-demand billing (pay per request)
-- **API Gateway**: HTTP API (cheapest option)
-- **EventBridge**: Free for AWS service events
+### Lambda Not Triggered
 
-**Estimated monthly cost**: $1-5 for low-volume usage
+**Problem:** EventBridge rule not firing  
+**Solution:** Verify Cost Anomaly Detection is enabled in AWS Cost Explorer
 
-## Security Best Practices
+```bash
+# Check Cost Anomaly Detection status
+aws ce describe-cost-anomaly-detectors
+```
 
-✅ IAM roles follow least privilege principle  
-✅ Secrets stored as Terraform variables (use AWS Secrets Manager in production)  
-✅ API Gateway has CORS configured  
-✅ DynamoDB encryption at rest enabled  
-✅ CloudWatch Logs for audit trail  
-✅ Point-in-time recovery enabled on DynamoDB  
+### Telegram Not Receiving Messages
 
-**Recommendation**: Use AWS Secrets Manager for production deployments:
+**Problem:** Alerts not appearing in Telegram  
+**Solution:** Check CloudWatch logs for errors
 
-```hcl
-data "aws_secretsmanager_secret_version" "telegram" {
-  secret_id = "cortex/telegram"
-}
+```bash
+aws logs tail /aws/lambda/finops-sentinel --follow
+```
+
+Common issues:
+- Invalid bot token (wrong format or revoked)
+- Wrong chat ID (get via @userinfobot)
+- Bot not added to chat (add bot to group first)
+
+### DynamoDB Permission Error
+
+**Problem:** Lambda can't write to DynamoDB  
+**Solution:** Verify IAM role has `dynamodb:PutItem` permission
+
+```bash
+aws iam get-role-policy --role-name finops-lambda-role \
+  --policy-name finops-policy
 ```
 
 ## Cleanup
@@ -410,144 +369,81 @@ To destroy all resources:
 terraform destroy
 ```
 
-Type `yes` to confirm deletion.
+This removes:
+- Lambda function and logs
+- DynamoDB table (data deleted)
+- IAM role and policies
+- EventBridge rule
+- API Gateway
 
-## Troubleshooting
+**Note:** S3 buckets (if any) and Cost Anomaly Detection settings are NOT deleted.
 
-### Lambda timeout errors
-Increase timeout in `variables.tf`:
-```hcl
-variable "lambda_timeout" {
-  default = 120  # seconds
-}
-```
+## Updating
 
-### DynamoDB permission errors
-Verify the IAM policy in `iam.tf` includes the table ARN
-
-### API Gateway 403 errors
-Check Lambda permissions with `aws_lambda_permission` resources
-
-## 🎯 Features Matrix
-
-### Terraform Infrastructure
-- ✅ Automated AWS deployment via Terraform
-- ✅ 3x Lambda functions (Auto-Remediator, Git Radar, FinOps Sentinel)
-- ✅ API Gateway v2 (HTTP API)
-- ✅ DynamoDB for state management
-- ✅ EventBridge for AWS Amplify monitoring
-- ✅ IAM roles with least privilege
-- ✅ CloudWatch logging
-
-### CI/CD System
-- ✅ GitHub Actions workflows
-- ✅ Continuous integration validation
-- ✅ AI-powered pull request reviews
-- ✅ Production deployment automation
-- ✅ Security scanning (Trivy, npm audit, safety)
-- ✅ Infrastructure as Code validation
-- ✅ Automated testing
-
-### Telegram Integration
-- ✅ Real-time notifications
-- ✅ Interactive buttons (View PR, Approve, Comment)
-- ✅ PR status updates
-- ✅ Deployment alerts
-- ✅ Error notifications
-- ✅ Custom message formatting
-
-### AI-Powered Features
-- ✅ Gemini 1.5 Pro code review
-- ✅ Lambda impact analysis
-- ✅ Terraform plan preview
-- ✅ Auto-labeling (optional Copilot SDK enhancement)
-- ✅ Custom agents for specialized reviews
-
----
-
-## 💡 Key Highlights
-
-### New CI/CD System Value
-- **Automation**: Remove manual code reviews, testing, deployments
-- **Quality**: AI-powered analysis catches bugs before production
-- **Speed**: Deploy to production in minutes, not hours
-- **Transparency**: Real-time notifications keep team informed
-- **Cost**: ~$3-8/month (cheaper than 1 developer-hour)
-- **Professional**: Enterprise-grade automation for any team size
-
-### Copilot SDK Enhancement (Optional)
-- **Advanced AI**: Use GPT-4.1, Claude, or Gemini
-- **Custom Agents**: Create specialized reviewers for different domains
-- **Better Context**: Tools read/search/glob for deep code understanding
-- **Session Management**: Multi-turn conversations with state
-- **MCP Integration**: Connect to external APIs and services
-- **Cost Optimization**: Built-in control and monitoring
-
----
-
-## 📊 Deployment Options
-
-### Option 1: Terraform Only (Existing)
-Deploy the original CORTEX serverless system with 3 Lambda functions and AWS infrastructure.
+### Update Lambda Code
 
 ```bash
-terraform init
-terraform plan
+# Edit src/module3/lambda_function.py
+# Then redeploy:
+terraform apply -replace="aws_lambda_function.finops_sentinel"
+```
+
+### Update Telegram Token
+
+```bash
+# Update terraform.tfvars
+vim terraform.tfvars
+
+# Redeploy
 terraform apply
 ```
 
-### Option 2: GitHub Actions CI/CD (New)
-Deploy complete CI/CD system with AI reviews, Telegram notifications, and automated workflows.
+### Update Cost Threshold
 
-Follow [docs/setup/QUICK_START_30MIN.md](docs/setup/QUICK_START_30MIN.md)
+```bash
+# Edit terraform.tfvars
+variable "cost_anomaly_threshold" {
+  default = 150  # Increased from 100
+}
 
-### Option 3: Full Stack
-Deploy both Terraform infrastructure AND GitHub Actions CI/CD system for complete automation.
+terraform apply
+```
 
----
+## Advanced Configuration
 
-## Support
+### Custom Alerts Per Service
 
-For issues or questions:
+Modify `src/module3/lambda_function.py` to alert differently for specific services:
 
-### Terraform Issues:
-- Review CloudWatch Logs
-- Check Terraform state: `terraform show`
-- Validate IAM permissions: `aws iam simulate-principal-policy`
+```python
+SERVICE_ALERT_THRESHOLDS = {
+    "Amazon EC2": 50,        # Alert if EC2 costs increase 50%+
+    "Amazon RDS": 25,        # Alert if RDS costs increase 25%+
+    "AWS Lambda": 200,       # Alert if Lambda costs increase 200%+
+}
+```
 
-### CI/CD System Issues:
-- Check GitHub Actions logs (Actions tab in your repo)
-- Review [docs/GITHUB_ACTIONS_TELEGRAM_GUIDE.md](docs/GITHUB_ACTIONS_TELEGRAM_GUIDE.md) troubleshooting section
-- Verify all secrets configured: Settings → Secrets → Actions
-- Test Telegram bot locally: `python scripts/telegram_bot.py`
+### Integration with Cost Optimization Tools
 
-### Copilot SDK Issues:
-- Review [docs/GITHUB_COPILOT_SDK_INTEGRATION.md](docs/GITHUB_COPILOT_SDK_INTEGRATION.md) best practices
-- Check [docs/COPILOT_SDK_QUICK_START.md](docs/COPILOT_SDK_QUICK_START.md) troubleshooting
+Send alerts to:
+- **Slack:** Add Slack webhook integration
+- **PagerDuty:** Send critical alerts
+- **CloudWatch Alarms:** Create Dashboard widgets
+- **Email:** SNS topic forwarding
 
----
+## Support & Feedback
 
-## 📖 Documentation
-
-**Total Documentation**: 3000+ lines across 10 documents  
-**Code Examples**: 15+ complete, copy-paste ready examples  
-**Coverage**: Setup, deployment, usage, troubleshooting, best practices  
-
-All documentation is in Markdown and can be read directly in VS Code or on GitHub.
-
----
-
-## License
-
-MIT License - See LICENSE file for details.
+For questions about FinOps Sentinel:
+1. Check CloudWatch logs: `aws logs tail /aws/lambda/finops-sentinel`
+2. Review Terraform outputs: `terraform output`
+3. Test Lambda manually: `aws lambda invoke --function-name finops-sentinel`
+4. Verify Telegram bot permissions in @BotFather
 
 ---
 
-**Developed by**: GitHub Copilot + DevOps Engineering Team  
-**Last Updated**: February 11, 2026  
-**Terraform Version**: 1.5+  
-**AWS Provider**: ~> 5.0  
-**Node.js**: 18+ (for GitHub Actions)  
-**Python**: 3.11+ (for Lambda functions)  
-
-**Project Status**: ✅ Production Ready
+**Status:** ✅ Production Ready  
+**Last Updated:** June 10, 2026  
+**Terraform Version:** 1.5+  
+**AWS Provider:** ~> 5.0  
+**Python Runtime:** 3.11+  
+**License:** MIT
