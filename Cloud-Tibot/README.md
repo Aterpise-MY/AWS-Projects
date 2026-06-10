@@ -4,7 +4,7 @@ Serverless Lambda function that monitors AWS cost anomalies and sends real-time 
 
 ## Overview
 
-FinOps Sentinel is a lightweight, serverless cost monitoring solution that detects unusual AWS spending patterns and sends instant alerts to your Telegram chat. It integrates with AWS services via EventBridge and DynamoDB to track cost anomalies without manual intervention.
+FinOps Sentinel is a lightweight, serverless cost monitoring solution that detects unusual AWS spending patterns and sends alerts to your Telegram chat. It integrates with AWS services via EventBridge and DynamoDB to track cost anomalies without manual intervention.
 
 ## Architecture
 
