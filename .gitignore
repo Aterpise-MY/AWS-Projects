@@ -35,3 +35,46 @@ override.tf.json
 
 # Claude Code internal files
 .claude/
+
+# ⚠️ SECURITY: Prevent secrets from being committed
+# Variable files with hardcoded secrets
+terraform.tfvars
+terraform.tfvars.deploy
+*.tfvars
+!*.tfvars.example
+
+# Environment files with credentials
+.env
+.env.local
+.env.*.local
+*.env
+
+# AWS credentials
+~/.aws/credentials
+~/.aws/config
+
+# GitHub credentials
+.github/credentials.json
+github_token.txt
+github_app_private_key.pem
+
+# Telegram bot tokens
+telegram_token.txt
+telegram_bot_token.txt
+
+# API keys and secrets
+*_secret*
+*_token*
+*_key.pem
+*_private_key
+
+# AWS Lambda zip files with secrets
+*.zip
+
+# Python secrets
+secrets.py
+config.py
+
+# Test files with credentials
+test_credentials.py
+test_secrets.py
