@@ -30,6 +30,7 @@ variable "db_password" {
   }
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "common_tags" {
   description = "Tags applied to every resource"
   type        = map(string)
