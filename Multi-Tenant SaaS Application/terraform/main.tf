@@ -29,7 +29,7 @@ provider "aws" {
 data "aws_region" "current" {}
 
 locals {
-  tags = merge(local.tags, { Environment = var.environment_name })
+  tags = merge(var.common_tags, { Environment = var.environment_name })
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ resource "aws_lambda_function" "users" {
     variables = local.lambda_env
   }
 
-  tags       = merge(local.tags, { Name = "saas-users-handler" })
+  tags = merge(local.tags, { Name = "saas-users-handler" })
   depends_on = [
     aws_iam_role_policy_attachment.lambda_vpc,
     aws_iam_role_policy_attachment.lambda_basic,
@@ -302,7 +302,7 @@ resource "aws_lambda_function" "orders" {
     variables = local.lambda_env
   }
 
-  tags       = merge(local.tags, { Name = "saas-orders-handler" })
+  tags = merge(local.tags, { Name = "saas-orders-handler" })
   depends_on = [
     aws_iam_role_policy_attachment.lambda_vpc,
     aws_iam_role_policy_attachment.lambda_basic,
@@ -332,7 +332,7 @@ resource "aws_lambda_function" "auth" {
     variables = local.lambda_env
   }
 
-  tags       = merge(local.tags, { Name = "saas-auth-handler" })
+  tags = merge(local.tags, { Name = "saas-auth-handler" })
   depends_on = [
     aws_iam_role_policy_attachment.lambda_vpc,
     aws_iam_role_policy_attachment.lambda_basic,
