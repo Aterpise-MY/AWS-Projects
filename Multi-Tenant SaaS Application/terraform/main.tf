@@ -27,7 +27,10 @@ provider "aws" {
 }
 
 data "aws_region" "current" {}
-data "aws_caller_identity" "current" {}
+
+locals {
+  tags = merge(local.tags, { Environment = var.environment_name })
+}
 
 # ─────────────────────────────────────────────────────────────
 # Cognito User Pool
@@ -59,7 +62,7 @@ resource "aws_cognito_user_pool" "main" {
     }
   }
 
-  tags = merge(var.common_tags, { Name = "saas-user-pool" })
+  tags = merge(local.tags, { Name = "saas-user-pool" })
 }
 
 resource "aws_cognito_user_pool_client" "main" {
@@ -87,7 +90,7 @@ resource "aws_secretsmanager_secret" "db_password" {
   name        = "saas/db/password"
   description = "RDS master password for Multi-Tenant SaaS"
 
-  tags = merge(var.common_tags, { Name = "saas-db-password" })
+  tags = merge(local.tags, { Name = "saas-db-password" })
 }
 
 resource "aws_secretsmanager_secret_version" "db_password" {
@@ -111,7 +114,7 @@ resource "aws_security_group" "lambda" {
     description = "Allow all outbound (RDS, Secrets Manager, CloudWatch)"
   }
 
-  tags = merge(var.common_tags, { Name = "saas-lambda-sg" })
+  tags = merge(local.tags, { Name = "saas-lambda-sg" })
 }
 
 resource "aws_security_group" "rds" {
@@ -127,7 +130,7 @@ resource "aws_security_group" "rds" {
     description     = "PostgreSQL from saas-lambda-sg"
   }
 
-  tags = merge(var.common_tags, { Name = "saas-rds-sg" })
+  tags = merge(local.tags, { Name = "saas-rds-sg" })
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -138,7 +141,7 @@ resource "aws_db_subnet_group" "main" {
   description = "Private subnets for SaaS RDS (Multi-AZ)"
   subnet_ids  = var.private_subnet_ids
 
-  tags = merge(var.common_tags, { Name = "saas-db-subnet-group" })
+  tags = merge(local.tags, { Name = "saas-db-subnet-group" })
 }
 
 resource "aws_db_instance" "main" {
@@ -164,7 +167,7 @@ resource "aws_db_instance" "main" {
   publicly_accessible       = false
   storage_encrypted         = true
 
-  tags = merge(var.common_tags, { Name = "saas-postgres" })
+  tags = merge(local.tags, { Name = "saas-postgres" })
 
   # Secret must exist before RDS is created so Lambda can read it at cold-start
   depends_on = [aws_secretsmanager_secret_version.db_password]
@@ -187,7 +190,7 @@ resource "aws_iam_role" "lambda" {
   name               = "saas-lambda-role"
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 
-  tags = merge(var.common_tags, { Name = "saas-lambda-role" })
+  tags = merge(local.tags, { Name = "saas-lambda-role" })
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_vpc" {
@@ -221,19 +224,19 @@ resource "aws_iam_role_policy" "lambda_secrets" {
 resource "aws_cloudwatch_log_group" "lambda_users" {
   name              = "/aws/lambda/saas-users-handler"
   retention_in_days = 14
-  tags              = merge(var.common_tags, { Name = "saas-users-handler-logs" })
+  tags              = merge(local.tags, { Name = "saas-users-handler-logs" })
 }
 
 resource "aws_cloudwatch_log_group" "lambda_orders" {
   name              = "/aws/lambda/saas-orders-handler"
   retention_in_days = 14
-  tags              = merge(var.common_tags, { Name = "saas-orders-handler-logs" })
+  tags              = merge(local.tags, { Name = "saas-orders-handler-logs" })
 }
 
 resource "aws_cloudwatch_log_group" "lambda_auth" {
   name              = "/aws/lambda/saas-auth-handler"
   retention_in_days = 14
-  tags              = merge(var.common_tags, { Name = "saas-auth-handler-logs" })
+  tags              = merge(local.tags, { Name = "saas-auth-handler-logs" })
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -278,7 +281,7 @@ resource "aws_lambda_function" "users" {
     variables = local.lambda_env
   }
 
-  tags       = merge(var.common_tags, { Name = "saas-users-handler" })
+  tags       = merge(local.tags, { Name = "saas-users-handler" })
   depends_on = local.lambda_deps
 }
 
@@ -301,7 +304,7 @@ resource "aws_lambda_function" "orders" {
     variables = local.lambda_env
   }
 
-  tags       = merge(var.common_tags, { Name = "saas-orders-handler" })
+  tags       = merge(local.tags, { Name = "saas-orders-handler" })
   depends_on = local.lambda_deps
 }
 
@@ -324,7 +327,7 @@ resource "aws_lambda_function" "auth" {
     variables = local.lambda_env
   }
 
-  tags       = merge(var.common_tags, { Name = "saas-auth-handler" })
+  tags       = merge(local.tags, { Name = "saas-auth-handler" })
   depends_on = local.lambda_deps
 }
 
@@ -335,7 +338,7 @@ resource "aws_api_gateway_rest_api" "main" {
   name        = "saas-api"
   description = "Multi-Tenant SaaS REST API — protected by Cognito"
 
-  tags = merge(var.common_tags, { Name = "saas-api" })
+  tags = merge(local.tags, { Name = "saas-api" })
 }
 
 resource "aws_api_gateway_authorizer" "cognito" {
@@ -492,5 +495,5 @@ resource "aws_api_gateway_stage" "prod" {
   stage_name    = "prod"
   description   = "Production stage"
 
-  tags = merge(var.common_tags, { Name = "saas-api-prod-stage" })
+  tags = merge(local.tags, { Name = "saas-api-prod-stage" })
 }
