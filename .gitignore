@@ -43,7 +43,7 @@ terraform.tfvars.deploy
 *.tfvars
 !*.tfvars.example
 # Allow non-sensitive environment-specific tfvars (db_password is injected via CI secret)
-!"Multi-Tenant SaaS Application/terraform/envs/*.tfvars"
+!Multi-Tenant SaaS Application/terraform/envs/*.tfvars
 
 # Environment files with credentials
 .env
