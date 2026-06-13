@@ -251,15 +251,6 @@ locals {
     REGION     = var.region
   }
 
-  # Run scripts/build_lambdas.sh before terraform apply
-  lambda_deps = [
-    aws_iam_role_policy_attachment.lambda_vpc,
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_db_instance.main,
-    aws_cloudwatch_log_group.lambda_users,
-    aws_cloudwatch_log_group.lambda_orders,
-    aws_cloudwatch_log_group.lambda_auth,
-  ]
 }
 
 resource "aws_lambda_function" "users" {
@@ -282,7 +273,14 @@ resource "aws_lambda_function" "users" {
   }
 
   tags       = merge(local.tags, { Name = "saas-users-handler" })
-  depends_on = local.lambda_deps
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_db_instance.main,
+    aws_cloudwatch_log_group.lambda_users,
+    aws_cloudwatch_log_group.lambda_orders,
+    aws_cloudwatch_log_group.lambda_auth,
+  ]
 }
 
 resource "aws_lambda_function" "orders" {
@@ -305,7 +303,14 @@ resource "aws_lambda_function" "orders" {
   }
 
   tags       = merge(local.tags, { Name = "saas-orders-handler" })
-  depends_on = local.lambda_deps
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_db_instance.main,
+    aws_cloudwatch_log_group.lambda_users,
+    aws_cloudwatch_log_group.lambda_orders,
+    aws_cloudwatch_log_group.lambda_auth,
+  ]
 }
 
 resource "aws_lambda_function" "auth" {
@@ -328,7 +333,14 @@ resource "aws_lambda_function" "auth" {
   }
 
   tags       = merge(local.tags, { Name = "saas-auth-handler" })
-  depends_on = local.lambda_deps
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_db_instance.main,
+    aws_cloudwatch_log_group.lambda_users,
+    aws_cloudwatch_log_group.lambda_orders,
+    aws_cloudwatch_log_group.lambda_auth,
+  ]
 }
 
 # ─────────────────────────────────────────────────────────────
