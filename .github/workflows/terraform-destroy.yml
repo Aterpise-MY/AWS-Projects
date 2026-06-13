@@ -1,0 +1,146 @@
+# =============================================================================
+# terraform-destroy.yml — Manual Destroy Workflow
+# =============================================================================
+# Destroys all Terraform-managed resources in a selected environment.
+# ONLY runs via workflow_dispatch — never on push or PR.
+#
+# Safety gates:
+#   1. The 'confirm' input must equal the exact string "destroy" (typo protection)
+#   2. The job uses the selected GitHub Environment, which should have required
+#      reviewers configured (especially for staging and prod)
+#   3. `deletion_protection = true` on the RDS instance in main.tf means the
+#      database cannot be deleted by Terraform without first disabling it manually.
+#      This is intentional — add the manual step to the runbook before running
+#      this workflow against prod.
+#
+# Use cases:
+#   - Tear down a dev environment to save costs
+#   - Clean up a staging environment after a release cycle
+#   - NEVER use against prod without explicit change-management approval
+# =============================================================================
+
+name: "Terraform — Destroy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      confirm:
+        description: "Type 'destroy' to confirm. This action is irreversible."
+        required: true
+        type: string
+
+env:
+  TF_VERSION:   "1.6.0"
+  AWS_REGION:   "us-east-1"
+  TF_DIR:       "Multi-Tenant SaaS Application/terraform"
+  STATE_BUCKET: "dnd-terraform-state-staging-022499047467"
+
+jobs:
+  # Gate: verify the confirmation string before proceeding
+  confirm:
+    name: "Confirm Destroy (${{ github.event.inputs.environment }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "check confirmation"
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "destroy" ]; then
+            echo "ERROR: confirmation input was '${{ github.event.inputs.confirm }}'"
+            echo "You must type exactly 'destroy' to proceed."
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding with destroy of: ${{ github.event.inputs.environment }}"
+
+
+  destroy:
+    name: "Destroy (${{ github.event.inputs.environment }})"
+    needs: confirm
+    runs-on: ubuntu-latest
+    # Uses the selected environment — configure required reviewers for staging/prod
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: "init"
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="key=multitenant-saas/${{ github.event.inputs.environment }}/terraform.tfstate"
+
+      # ⚠️  IMPORTANT: The RDS instance has deletion_protection = true in main.tf.
+      # Before running destroy on staging or prod, you must manually disable it:
+      #
+      #   aws rds modify-db-instance \
+      #     --db-instance-identifier saas-postgres \
+      #     --no-deletion-protection \
+      #     --apply-immediately
+      #
+      # dev bypasses this because multi_az=false and it's a lower-impact environment.
+      - name: "disable RDS deletion protection (dev only)"
+        if: github.event.inputs.environment == 'dev'
+        run: |
+          aws rds modify-db-instance \
+            --db-instance-identifier "saas-postgres" \
+            --no-deletion-protection \
+            --apply-immediately 2>/dev/null \
+          && echo "Deletion protection disabled" \
+          || echo "RDS instance not found or already unprotected — continuing"
+
+      # Take a final state snapshot before destroying
+      - name: "snapshot final state"
+        run: |
+          aws s3 cp \
+            "s3://${{ env.STATE_BUCKET }}/multitenant-saas/${{ github.event.inputs.environment }}/terraform.tfstate" \
+            "s3://${{ env.STATE_BUCKET }}/plans/multitenant/${{ github.event.inputs.environment }}/pre-destroy-${{ github.sha }}.tfstate" \
+          || echo "No state to snapshot"
+
+      - name: "terraform destroy"
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.MULTITENANT_DB_PASSWORD }}
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -input=false \
+            -no-color \
+            -var-file="envs/${{ github.event.inputs.environment }}.tfvars"
+
+      - name: "post destroy summary"
+        if: always()
+        run: |
+          {
+            echo "## Terraform Destroy — \`${{ github.event.inputs.environment }}\`"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Status | \`${{ job.status }}\` |"
+            echo "| Environment | \`${{ github.event.inputs.environment }}\` |"
+            echo "| Destroyed by | \`${{ github.actor }}\` |"
+            echo "| SHA | \`${{ github.sha }}\` |"
+            echo "| State backup | \`s3://${{ env.STATE_BUCKET }}/plans/multitenant/${{ github.event.inputs.environment }}/pre-destroy-${{ github.sha }}.tfstate\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

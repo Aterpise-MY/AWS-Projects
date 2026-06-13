@@ -1,0 +1,200 @@
+# =============================================================================
+# terraform-drift.yml — Scheduled Drift Detection
+# =============================================================================
+# Runs terraform plan for each environment on a cron schedule.
+# If the plan is non-empty (exit code 2 = changes), it means something in AWS
+# was changed outside of Terraform (manual console change, AWS auto-update, etc.)
+#
+# On drift detected:
+#   - Creates or updates a GitHub Issue titled "[drift] <env> — <date>"
+#   - Includes the full plan diff in the issue body
+#
+# Schedule: 06:00 UTC, Monday–Friday
+# Also triggerable manually via workflow_dispatch for on-demand checks.
+# =============================================================================
+
+name: "Terraform — Drift Detection"
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"   # 06:00 UTC Mon-Fri
+  workflow_dispatch:          # allow manual on-demand runs
+
+env:
+  TF_VERSION:   "1.6.0"
+  AWS_REGION:   "us-east-1"
+  TF_DIR:       "Multi-Tenant SaaS Application/terraform"
+
+jobs:
+  detect-drift:
+    name: "Detect Drift (${{ matrix.env }})"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, staging, prod]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: "init (${{ matrix.env }})"
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="key=multitenant-saas/${{ matrix.env }}/terraform.tfstate"
+
+      # Run plan with -detailed-exitcode:
+      #   0 = no changes (in sync)
+      #   1 = error
+      #   2 = drift detected (changes present)
+      - name: "drift check (${{ matrix.env }})"
+        id: drift
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.MULTITENANT_DB_PASSWORD }}
+        run: |
+          set +e
+          terraform plan \
+            -input=false -no-color \
+            -var-file="envs/${{ matrix.env }}.tfvars" \
+            -detailed-exitcode \
+            -out=tfplan
+          TF_EXIT=$?
+          echo "exitcode=$TF_EXIT" >> $GITHUB_OUTPUT
+
+          if [ "$TF_EXIT" = "2" ]; then
+            echo "drift=true" >> $GITHUB_OUTPUT
+            terraform show -no-color tfplan > drift.txt
+          elif [ "$TF_EXIT" = "0" ]; then
+            echo "drift=false" >> $GITHUB_OUTPUT
+            echo "No drift detected." > drift.txt
+          else
+            echo "drift=error" >> $GITHUB_OUTPUT
+            echo "Terraform plan encountered an error." > drift.txt
+          fi
+          set -e
+
+      # Post Step Summary regardless of outcome
+      - name: "summary"
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          STATUS="${{ steps.drift.outputs.drift }}"
+          ICON=$([ "$STATUS" = "false" ] && echo "✅" || echo "⚠️")
+          {
+            echo "## ${ICON} Drift Detection — \`${{ matrix.env }}\`"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Environment | \`${{ matrix.env }}\` |"
+            echo "| Result | \`${STATUS}\` |"
+            echo "| Run time | \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\` |"
+            echo ""
+            echo "<details><summary>Plan output</summary>"
+            echo ""
+            echo '```hcl'
+            cat drift.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only create/update an issue when actual drift is found
+      - name: "open drift issue (${{ matrix.env }})"
+        if: steps.drift.outputs.drift == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs    = require('fs');
+            const env   = '${{ matrix.env }}';
+            const date  = new Date().toISOString().split('T')[0];
+            const tag   = `<!-- drift-${env} -->`;
+
+            let diff = '';
+            try {
+              diff = fs.readFileSync(
+                '${{ env.TF_DIR }}/drift.txt', 'utf8'
+              );
+            } catch (_) { diff = '(output unavailable)'; }
+            if (diff.length > 60000) diff = diff.substring(0, 60000) + '\n\n[truncated]';
+
+            const title = `[drift] ${env} environment — ${date}`;
+            const body  = [
+              tag,
+              `## Infrastructure Drift Detected — \`${env}\``,
+              '',
+              `Scheduled drift scan on **${date}** found pending changes in the \`${env}\` environment.`,
+              'This means AWS resources differ from the Terraform state.',
+              '',
+              '**Action:** Run `terraform apply -var-file=envs/' + env + '.tfvars` to reconcile,',
+              'or investigate and update the Terraform code if the change was intentional.',
+              '',
+              '<details>',
+              '<summary>Terraform plan diff (what would change)</summary>',
+              '',
+              '```hcl',
+              diff,
+              '```',
+              '</details>',
+              '',
+              `| Field | Value |`,
+              `|---|---|`,
+              `| Environment | \`${env}\` |`,
+              `| Detected at | \`${date}\` |`,
+              `| Workflow run | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |`,
+            ].join('\n');
+
+            // Search for an open drift issue for this environment to avoid duplicates
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: 'terraform-drift',
+            });
+            const existing = issues.find(i => i.body && i.body.includes(tag));
+
+            if (existing) {
+              // Update existing open issue rather than creating a duplicate
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.number,
+                title,
+                body,
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.number,
+                body: `Drift still present as of ${date}. Latest diff updated in issue body.`,
+              });
+              core.notice(`Updated existing drift issue #${existing.number}`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title,
+                body,
+                labels: ['terraform-drift', env],
+              });
+              core.notice(`Created drift issue #${issue.number}: ${issue.html_url}`);
+            }
+
+      - name: "log no-drift"
+        if: steps.drift.outputs.drift == 'false'
+        run: echo "${{ matrix.env }}: no drift detected at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
