@@ -1,0 +1,338 @@
+# =============================================================================
+# terraform-plan.yml — PR Checks
+# =============================================================================
+# Triggers on every pull_request targeting main that touches Terraform files.
+#
+# Jobs (all run in parallel after validate passes):
+#   validate   → terraform fmt -check, tflint, terraform validate
+#   plan-*     → terraform plan for each environment (dev/staging/prod)
+#   security   → tfsec misconfiguration scan
+#   cost       → infracost cost diff estimate
+#
+# Every job posts/updates a dedicated PR comment so the reviewer sees
+# the full picture without leaving GitHub.
+# =============================================================================
+
+name: "Terraform — PR Plan"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Multi-Tenant SaaS Application/terraform/**"
+
+# Cancel redundant runs on the same PR branch
+concurrency:
+  group: tf-plan-${{ github.head_ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION:    "1.6.0"
+  AWS_REGION:    "us-east-1"
+  TF_DIR:        "Multi-Tenant SaaS Application/terraform"
+  STATE_BUCKET:  "dnd-terraform-state-staging-022499047467"
+
+# ── 1. Validate — fmt + tflint + validate ─────────────────────────────────────
+jobs:
+  validate:
+    name: "Validate"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # AWS auth: uses OIDC role if AWS_ROLE_ARN is set, else falls back to keys
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # tflint checks AWS-specific naming, deprecated resources, and coding rules
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: "v0.50.3"
+
+      - name: "fmt check"
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: "tflint — init plugins"
+        working-directory: ${{ env.TF_DIR }}
+        run: tflint --init
+
+      - name: "tflint — run"
+        working-directory: ${{ env.TF_DIR }}
+        run: tflint --format compact
+
+      # Init against dev backend just to resolve providers; validate is purely local
+      - name: "terraform init (provider resolution)"
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="key=multitenant-saas/dev/terraform.tfstate"
+
+      - name: "terraform validate"
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate -no-color
+
+
+# ── 2. Plan — one job per environment ────────────────────────────────────────
+  plan:
+    name: "Plan (${{ matrix.env }})"
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    strategy:
+      fail-fast: false       # keep other envs running even if one plan fails
+      matrix:
+        env: [dev, staging, prod]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # Each environment uses its own state file key via -backend-config override
+      - name: "init (${{ matrix.env }})"
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="key=multitenant-saas/${{ matrix.env }}/terraform.tfstate"
+
+      - name: "plan (${{ matrix.env }})"
+        id: plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          # Sensitive vars come from secrets; non-sensitive are in envs/*.tfvars
+          TF_VAR_db_password: ${{ secrets.MULTITENANT_DB_PASSWORD }}
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -no-color \
+            -out=tfplan \
+            -var-file="envs/${{ matrix.env }}.tfvars" \
+            -detailed-exitcode
+          TF_EXIT=$?
+          echo "exitcode=$TF_EXIT" >> $GITHUB_OUTPUT
+          set -e
+          [ "$TF_EXIT" = "1" ] && exit 1 || true
+
+      - name: "render plan to text"
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform show -no-color tfplan > plan.txt
+
+      # Save as artifact so the apply workflow can reuse the exact same binary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "tfplan-${{ matrix.env }}-${{ github.sha }}"
+          path: "${{ env.TF_DIR }}/tfplan"
+          retention-days: 5
+
+      # Also copy to S3 for audit trail and cross-run rollback reference
+      - name: "upload plan to S3"
+        run: |
+          aws s3 cp "${{ env.TF_DIR }}/tfplan" \
+            "s3://${{ env.STATE_BUCKET }}/plans/multitenant/${{ matrix.env }}/${{ github.sha }}.tfplan"
+
+      # Post/update a per-environment comment on the PR.
+      # The HTML comment tag <!-- tf-plan-{env} --> is used as a unique anchor
+      # so re-runs overwrite the previous comment rather than creating duplicates.
+      - name: "post plan comment (${{ matrix.env }})"
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const fs   = require('fs');
+            const env  = '${{ matrix.env }}';
+            const exit = '${{ steps.plan.outputs.exitcode }}';
+            const tag  = `<!-- tf-plan-${env} -->`;
+
+            let plan = '';
+            try {
+              plan = fs.readFileSync(
+                '${{ env.TF_DIR }}/plan.txt', 'utf8'
+              );
+            } catch (_) { plan = '(plan output unavailable)'; }
+            if (plan.length > 55000) plan = plan.substring(0, 55000) + '\n\n[…truncated]';
+
+            const icon  = exit === '2' ? '⚠️' : exit === '0' ? '✅' : '❌';
+            const label = exit === '2' ? 'Changes detected'
+                        : exit === '0' ? 'No changes'
+                        : 'Plan failed';
+
+            const body = [
+              tag,
+              `### ${icon} Terraform Plan — \`${env}\` — ${label}`,
+              '',
+              '<details>',
+              `<summary>Full plan output (exit ${exit})</summary>`,
+              '',
+              '```hcl',
+              plan,
+              '```',
+              '</details>',
+              '',
+              `> SHA: \`${{ github.sha }}\` · Actor: \`${{ github.actor }}\``,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(
+              c => c.user.login === 'github-actions[bot]' && c.body.includes(tag)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+
+# ── 3. Security — tfsec misconfiguration scan ─────────────────────────────────
+  security:
+    name: "Security (tfsec)"
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # tfsec scans for AWS security misconfigurations (open security groups,
+      # unencrypted storage, missing logging, etc.)
+      - name: "tfsec scan"
+        id: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ${{ env.TF_DIR }}
+          format: sarif
+          additional_args: "--no-colour --include-ignored"
+          soft_fail: true   # warn but don't block the PR
+
+      # Post security findings as a PR comment (update on re-run)
+      - name: "post security comment"
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          script: |
+            const tag    = '<!-- tf-security -->';
+            const result = '${{ steps.tfsec.outcome }}';
+            const icon   = result === 'success' ? '✅' : '⚠️';
+
+            const body = [
+              tag,
+              `### ${icon} Security Scan (tfsec)`,
+              '',
+              `Outcome: \`${result}\``,
+              '',
+              'Download the SARIF report from the workflow artifacts for detailed findings.',
+              '',
+              `> SHA: \`${{ github.sha }}\``,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(
+              c => c.user.login === 'github-actions[bot]' && c.body.includes(tag)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+
+# ── 4. Cost — Infracost diff estimate ─────────────────────────────────────────
+  cost:
+    name: "Cost (Infracost)"
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Infracost compares the cost of the PR branch vs the base branch.
+      # Requires INFRACOST_API_KEY secret (free at infracost.io).
+      - uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: "infracost breakdown (base branch)"
+        run: |
+          infracost breakdown \
+            --path="${{ env.TF_DIR }}" \
+            --terraform-var-file="${{ env.TF_DIR }}/envs/prod.tfvars" \
+            --format=json \
+            --out-file=/tmp/infracost-base.json
+
+      - name: "infracost diff (this PR vs base)"
+        run: |
+          infracost diff \
+            --path="${{ env.TF_DIR }}" \
+            --terraform-var-file="${{ env.TF_DIR }}/envs/prod.tfvars" \
+            --format=json \
+            --compare-to=/tmp/infracost-base.json \
+            --out-file=/tmp/infracost-diff.json
+
+      # Post the cost diff as a PR comment (updates on re-run)
+      - uses: infracost/actions/comment@v1
+        with:
+          path: /tmp/infracost-diff.json
+          behavior: update   # update existing comment instead of posting new one
