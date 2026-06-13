@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REPO="Brendon20011007/AWS-Projects"
+REPO="Aterpise-MY/AWS-Projects"
 ROLE_NAME="github-actions-terraform"
 REGION="us-east-1"
 
