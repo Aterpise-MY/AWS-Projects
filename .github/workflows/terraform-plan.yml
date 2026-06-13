@@ -44,6 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       # AWS auth: uses OIDC role if AWS_ROLE_ARN is set, else falls back to keys
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -103,6 +106,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
