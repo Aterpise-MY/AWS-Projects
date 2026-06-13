@@ -162,6 +162,7 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot       = false
   final_snapshot_identifier = "saas-postgres-final-snapshot"
   publicly_accessible       = false
+  storage_encrypted         = true
 
   tags = merge(var.common_tags, { Name = "saas-postgres" })
 
@@ -213,6 +214,29 @@ resource "aws_iam_role_policy" "lambda_secrets" {
 }
 
 # ─────────────────────────────────────────────────────────────
+# CloudWatch Log Groups — explicit retention prevents unbounded log storage cost.
+# Lambda auto-creates /aws/lambda/<name> if absent, but with no retention,
+# which fails FinOps policy checks.
+# ─────────────────────────────────────────────────────────────
+resource "aws_cloudwatch_log_group" "lambda_users" {
+  name              = "/aws/lambda/saas-users-handler"
+  retention_in_days = 14
+  tags              = merge(var.common_tags, { Name = "saas-users-handler-logs" })
+}
+
+resource "aws_cloudwatch_log_group" "lambda_orders" {
+  name              = "/aws/lambda/saas-orders-handler"
+  retention_in_days = 14
+  tags              = merge(var.common_tags, { Name = "saas-orders-handler-logs" })
+}
+
+resource "aws_cloudwatch_log_group" "lambda_auth" {
+  name              = "/aws/lambda/saas-auth-handler"
+  retention_in_days = 14
+  tags              = merge(var.common_tags, { Name = "saas-auth-handler-logs" })
+}
+
+# ─────────────────────────────────────────────────────────────
 # Lambda Functions
 # ─────────────────────────────────────────────────────────────
 locals {
@@ -229,6 +253,9 @@ locals {
     aws_iam_role_policy_attachment.lambda_vpc,
     aws_iam_role_policy_attachment.lambda_basic,
     aws_db_instance.main,
+    aws_cloudwatch_log_group.lambda_users,
+    aws_cloudwatch_log_group.lambda_orders,
+    aws_cloudwatch_log_group.lambda_auth,
   ]
 }
 

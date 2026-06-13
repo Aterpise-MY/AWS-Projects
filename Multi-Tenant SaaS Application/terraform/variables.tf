@@ -36,6 +36,7 @@ variable "common_tags" {
   default = {
     Environment = "production"
     ManagedBy   = "terraform"
+    Project     = "multitenant-saas"
   }
 }
 
