@@ -42,6 +42,8 @@ terraform.tfvars
 terraform.tfvars.deploy
 *.tfvars
 !*.tfvars.example
+# Allow non-sensitive environment-specific tfvars (db_password is injected via CI secret)
+!Multi-Tenant SaaS Application/terraform/envs/*.tfvars
 
 # Environment files with credentials
 .env
@@ -86,3 +88,4 @@ Resume/3_Cloud_Tibot.md
 FINOPS_SENTINEL_SUMMARY.md
 .gitignore
 Cloud-Tibot/FINOPS_SETUP_CHECKLIST.md
+Multi-Tier Web App Deployment/provider.tf

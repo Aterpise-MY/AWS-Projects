@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: false   # never interrupt an in-flight apply
 
 env:
-  TF_VERSION:   "1.6.0"
+  TF_VERSION:   "1.12.0"
   AWS_REGION:   "us-east-1"
   TF_DIR:       "Multi-Tenant SaaS Application/terraform"
   STATE_BUCKET: "dnd-terraform-state-staging-022499047467"
@@ -61,11 +61,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
@@ -133,11 +134,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
@@ -248,11 +250,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
@@ -318,11 +321,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
@@ -419,11 +423,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
@@ -489,11 +494,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: "build lambda packages"
+        run: bash "Multi-Tenant SaaS Application/scripts/build_lambdas.sh"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume:        ${{ secrets.AWS_ROLE_ARN }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
