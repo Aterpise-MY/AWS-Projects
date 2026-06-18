@@ -21,7 +21,7 @@ on:
   workflow_dispatch:          # allow manual on-demand runs
 
 env:
-  TF_VERSION:   "1.6.0"
+  TF_VERSION:    "1.12.0"
   AWS_REGION:   "us-east-1"
   TF_DIR:       "Multi-Tenant SaaS Application/terraform"
 
