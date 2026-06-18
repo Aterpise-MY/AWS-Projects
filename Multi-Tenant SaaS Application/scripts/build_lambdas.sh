@@ -32,11 +32,9 @@ for FUNC in "${FUNCTIONS[@]}"; do
 
   # Create deterministic zip with consistent timestamps
   rm -f "$ZIP_OUT"
-  python3 << 'PYTHON_SCRIPT'
+  python3 << PYTHON_SCRIPT
 import os
 import zipfile
-import sys
-from pathlib import Path
 
 src_dir = "$SRC_DIR"
 zip_out = "$ZIP_OUT"
