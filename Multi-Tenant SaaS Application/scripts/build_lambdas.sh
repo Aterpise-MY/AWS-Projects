@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ================================================================
-# Build Lambda deployment packages
+# Install Lambda dependencies
 # Run this before `terraform apply` or `cli/deploy.sh`
+# Note: Terraform will create the zip files via archive_file data source
 # ================================================================
 set -euo pipefail
 
@@ -12,52 +13,30 @@ FUNCTIONS=(users orders auth)
 
 for FUNC in "${FUNCTIONS[@]}"; do
   SRC_DIR="$LAMBDA_DIR/${FUNC}_handler"
-  ZIP_OUT="$LAMBDA_DIR/${FUNC}_handler.zip"
 
-  echo "─── Building $FUNC handler ───"
+  echo "─── Installing dependencies for $FUNC handler ───"
 
   if [[ ! -d "$SRC_DIR" ]]; then
     echo "ERROR: $SRC_DIR not found" >&2
     exit 1
   fi
 
-  # Install dependencies into the source directory (Lambda deployment package layout)
+  # Remove old dependencies to ensure clean install
+  find "$SRC_DIR" -mindepth 1 -maxdepth 1 -not -name "handler.py" -type d -exec rm -rf {} + 2>/dev/null || true
+  find "$SRC_DIR" -mindepth 1 -maxdepth 1 -not -name "handler.py" -type f ! -name "*.py" -delete 2>/dev/null || true
+
+  # Install dependencies into the source directory with deterministic options
+  # Using no-cache-dir for reproducibility across different environments
   pip install \
     -r "$LAMBDA_DIR/requirements.txt" \
     -t "$SRC_DIR" \
-    --upgrade \
+    --no-cache-dir \
     --quiet \
     --platform manylinux2014_x86_64 \
     --only-binary=:all:
 
-  # Create deterministic zip with consistent timestamps
-  rm -f "$ZIP_OUT"
-  python3 << PYTHON_SCRIPT
-import os
-import zipfile
-
-src_dir = "$SRC_DIR"
-zip_out = "$ZIP_OUT"
-
-# Use fixed date (1980-01-01 00:00:00) for all files for consistency
-fixed_date_time = (1980, 1, 1, 0, 0, 0)
-
-with zipfile.ZipFile(zip_out, 'w', zipfile.ZIP_DEFLATED) as zf:
-    for root, dirs, files in os.walk(src_dir):
-        for file in sorted(files):  # Sort for consistency
-            file_path = os.path.join(root, file)
-            arcname = os.path.relpath(file_path, src_dir)
-
-            # Read file and add to zip with fixed timestamp
-            with open(file_path, 'rb') as f:
-                zinfo = zipfile.ZipInfo(arcname, date_time=fixed_date_time)
-                zinfo.external_attr = 0o644 << 16  # Regular file, readable
-                zf.writestr(zinfo, f.read(), compress_type=zipfile.ZIP_DEFLATED)
-PYTHON_SCRIPT
-
-  SIZE=$(du -sh "$ZIP_OUT" | cut -f1)
-  echo "    Built: $ZIP_OUT ($SIZE)"
+  echo "    Dependencies installed"
 done
 
 echo
-echo "All Lambda packages built. You can now run terraform apply or cli/deploy.sh."
+echo "All Lambda dependencies installed. Terraform will create zip files via archive_file."
