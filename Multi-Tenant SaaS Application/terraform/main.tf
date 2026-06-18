@@ -32,21 +32,24 @@ data "aws_region" "current" {}
 # Lambda deployment packages (created by Terraform for consistency)
 # ─────────────────────────────────────────────────────────────
 data "archive_file" "users_handler" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/users_handler"
-  output_path = "${path.module}/../lambda/users_handler.zip"
+  type             = "zip"
+  source_dir       = "${path.module}/../lambda/users_handler"
+  output_path      = "${path.module}/../lambda/users_handler.zip"
+  output_file_mode = "0666"
 }
 
 data "archive_file" "orders_handler" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/orders_handler"
-  output_path = "${path.module}/../lambda/orders_handler.zip"
+  type             = "zip"
+  source_dir       = "${path.module}/../lambda/orders_handler"
+  output_path      = "${path.module}/../lambda/orders_handler.zip"
+  output_file_mode = "0666"
 }
 
 data "archive_file" "auth_handler" {
-  type        = "zip"
-  source_dir  = "${path.module}/../lambda/auth_handler"
-  output_path = "${path.module}/../lambda/auth_handler.zip"
+  type             = "zip"
+  source_dir       = "${path.module}/../lambda/auth_handler"
+  output_path      = "${path.module}/../lambda/auth_handler.zip"
+  output_file_mode = "0666"
 }
 
 locals {
