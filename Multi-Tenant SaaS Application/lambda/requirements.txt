@@ -1,5 +1,0 @@
-# Lambda Python 3.12 dependencies
-# boto3 is pre-installed in the Lambda runtime — only third-party libs are needed here.
-
-# Pure-C PostgreSQL adapter; use the binary wheel for Lambda compatibility.
-psycopg2-binary==2.9.9
