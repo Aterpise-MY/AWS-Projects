@@ -11,8 +11,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 3. [Projects](#projects)
 4. [Technology Stack](#technology-stack)
 5. [Key Achievements](#key-achievements)
-6. [Resume Summaries](#resume-summaries)
-7. [Getting Started](#getting-started)
+6. [Getting Started](#getting-started)
 8. [Repository Structure](#repository-structure)
 
 ---
@@ -70,7 +69,6 @@ A production-ready multi-tenant SaaS platform with complete tenant isolation at 
 
 **Links:**
 - 📄 [Full Documentation](Multi-Tenant%20SaaS%20Application/README.md)
-- 📝 [Resume Summary](Resume/5_Multi-Tenant%20SaaS%20Application.md)
 - 🧪 [Test Guides](Multi-Tenant%20SaaS%20Application/TESTING-GUIDE.md)
 
 ---
@@ -99,7 +97,6 @@ A classic three-tier web application architecture with web servers, application 
 
 **Links:**
 - 📄 [Full Documentation](Multi-Tier%20Web%20App%20Deployment/README.md)
-- 📝 [Resume Summary](Resume/4_Multi_Tier_Web_App.md)
 
 ---
 
@@ -127,7 +124,6 @@ A highly scalable web application using an Application Load Balancer (ALB) with 
 
 **Links:**
 - 📄 [Full Documentation](Scalable%20Web%20App%20with%20ALB%20%26%20Auto%20Scaling/README.md)
-- 📝 [Resume Summary](Resume/2_ALB_Auto_Scaling.md)
 
 ---
 
@@ -157,7 +153,6 @@ An ultra-high-performance web application using a Network Load Balancer (NLB) wi
 
 **Links:**
 - 📄 [Full Documentation](Scalable%20Web%20App%20with%20NLB%20%26%20Auto%20Scaling/README.md)
-- 📝 [Resume Summary](Resume/1_NLB_Auto_Scaling.md)
 
 ---
 
@@ -185,7 +180,6 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 
 **Links:**
 - 📄 [Full Documentation](Cloud-Tibot/README.md)
-- 📝 [Resume Summary](Resume/3_Cloud_Tibot.md)
 
 ---
 
@@ -240,25 +234,6 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 
 ---
 
-## 📝 Resume Summaries
-
-All projects include condensed 2-page resume versions perfect for:
-- Portfolio links on GitHub
-- Job applications and cover letters
-- Technical interviews and discussions
-- LinkedIn profile highlights
-
-**All Resumes:** [Resume Folder](Resume/)
-
-| Resume | Project | File |
-|--------|---------|------|
-| NLB Auto-Scaling | Scalable Web App (NLB) | [1_NLB_Auto_Scaling.md](Resume/1_NLB_Auto_Scaling.md) |
-| ALB Auto-Scaling | Scalable Web App (ALB) | [2_ALB_Auto_Scaling.md](Resume/2_ALB_Auto_Scaling.md) |
-| Cloud-Tibot | Microservices Platform | [3_Cloud_Tibot.md](Resume/3_Cloud_Tibot.md) |
-| Multi-Tier Web App | Enterprise Architecture | [4_Multi_Tier_Web_App.md](Resume/4_Multi_Tier_Web_App.md) |
-| Multi-Tenant SaaS | Serverless Multi-Tenancy | [5_Multi-Tenant SaaS Application.md](Resume/5_Multi-Tenant%20SaaS%20Application.md) |
-
----
 
 ## 🚀 Getting Started
 
@@ -510,8 +485,7 @@ These projects are provided as educational and portfolio materials.
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
 | **Current Branch** | `feat/multi-tenant-SaaS-Application` |
-| **Latest PR** | [PR #17](https://github.com/Aterpise-MY/AWS-Projects/pull/17) |
-| **Portfolio** | [Resume Folder](Resume/) with all summaries |
+| **Latest PR** | [PR #18](https://github.com/Aterpise-MY/AWS-Projects/pull/18) |
 
 ---
 
