@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **5 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **6 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -38,6 +38,7 @@ This portfolio showcases **5 complete AWS infrastructure projects**, each demons
 | [Scalable Web App (ALB)](#3-scalable-web-app-with-alb--auto-scaling) | ALB + ASG | Layer 7 routing | 12-18 min | $220 |
 | [Scalable Web App (NLB)](#4-scalable-web-app-with-nlb--auto-scaling) | NLB + ASG | High-performance APIs | 12-18 min | $195 |
 | [Cloud-Tibot](#5-cloud-tibot) | Microservices | Bot platforms, agents | Variable | Variable |
+| [AWS App Runner Deployment](#6-aws-app-runner-deployment) | Container | Containerised web apps | 8-12 min | $16-26 |
 
 ---
 
@@ -178,6 +179,37 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 
 ---
 
+### 6. AWS App Runner Deployment
+
+**Location:** `./AWS App Runner Deployment/`
+
+**Description:**
+A production-ready containerised web application deployed on AWS App Runner with full Infrastructure as Code via Terraform. Demonstrates end-to-end container workflow — Docker multi-stage build, ECR private registry, IAM least-privilege roles, auto-scaling, and CloudWatch observability — all without managing VPCs or EC2 instances.
+
+**Architecture:** Docker (linux/amd64) → ECR → App Runner → HTTPS endpoint
+
+**Key Features:**
+- ✅ Serverless container hosting — no VPC, no EC2, no load balancer config
+- ✅ Private ECR registry with scan-on-push and lifecycle policy (keep 10 images)
+- ✅ Auto-deployment on ECR push (zero-downtime swap)
+- ✅ Least-privilege IAM — separate service role and instance role with correct trust principals
+- ✅ CloudWatch Logs + 3 metric alarms (CPU, memory, deployment failures)
+- ✅ 21-test architecture validation script (18 PASS / 3 WARN / 0 FAIL)
+- ✅ 9 deployment issues root-caused and documented (including arm64/amd64 Apple Silicon gotcha)
+
+**Tech Stack:** Terraform, AWS App Runner, Amazon ECR, Docker buildx, Node.js 18, IAM, CloudWatch
+
+**Cost:** ~$16-26/month (0.25 vCPU / 512 MB, 1 instance)
+
+**Testing:** 21 automated architecture tests across 6 component groups
+
+**Links:**
+- 📄 [Full Documentation](AWS%20App%20Runner%20Deployment/README.md)
+- 📊 [Live Audit Results](AWS%20App%20Runner%20Deployment/Result.md)
+- 🧪 [Architecture Test Script](AWS%20App%20Runner%20Deployment/Script/test_architecture.sh)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -189,7 +221,8 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 
 | Category | Services |
 |----------|----------|
-| **Compute** | EC2, Lambda, ECS/Fargate (optional) |
+| **Compute** | EC2, Lambda, App Runner, ECS/Fargate (optional) |
+| **Container** | App Runner, Amazon ECR, Docker (multi-stage, buildx) |
 | **Load Balancing** | ALB, NLB, API Gateway |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
@@ -217,7 +250,7 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 50+ automated tests across all projects  
+✅ **Comprehensive Testing** — 70+ automated tests across all projects  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -335,12 +368,27 @@ AWS Project/                                    # Root portfolio directory
 │   ├── terraform/
 │   └── scripts/
 │
-├── Resume/                                   # Portfolio summaries
+├── AWS App Runner Deployment/                # Project 6: Container / App Runner
+│   ├── README.md                            # Full documentation + 9 known issues
+│   ├── Result.md                            # Live audit results (IDs, ARNs, test output)
+│   ├── main.tf                              # 9 Terraform resources
+│   ├── variables.tf                         # Input variables
+│   ├── outputs.tf                           # 15 output values
+│   ├── terraform.tfvars.example             # Configuration template
+│   ├── Dockerfile                           # Multi-stage Node.js (linux/amd64)
+│   ├── .dockerignore                        # Excludes .terraform/, *.tfstate*, node_modules/
+│   ├── server.js                            # Node.js HTTP server (port 8080)
+│   ├── package.json                         # App dependencies
+│   └── Script/
+│       └── test_architecture.sh             # 21-test architecture health check
+│
+├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
 │   ├── 3_Cloud_Tibot.md
 │   ├── 4_Multi_Tier_Web_App.md
-│   └── 5_Multi-Tenant SaaS Application.md
+│   ├── 5_Multi-Tenant SaaS Application.md
+│   └── 6_App_Runner_Deployment.md
 │
 ├── .github/
 │   └── workflows/                            # CI/CD pipelines
@@ -374,14 +422,15 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Scalable Web App (ALB) | ~$220 | EC2 + ALB (75%) | Scheduled scaling, spot instances |
 | Scalable Web App (NLB) | ~$195 | EC2 + NLB (70%) | Auto-scaling, scheduled downtime |
 | Cloud-Tibot | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
+| App Runner Deployment | ~$16-26 | App Runner compute | Set min instances to 0 for idle cost reduction |
 
-**Total Estimated Cost:** ~$950-1,200/month (all 5 projects running)
+**Total Estimated Cost:** ~$966-1,226/month (all 6 projects running)
 
 ---
 
 ## 🧪 Testing & Validation
 
-**Total Test Coverage:** 50+ automated tests across all projects
+**Total Test Coverage:** 70+ automated tests across all projects
 
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
@@ -390,6 +439,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Scalable Web App (ALB) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Failover |
 | Scalable Web App (NLB) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Throughput |
 | Cloud-Tibot | ✅ 3 tests | ✅ 10 tests | ✅ 6 tests | ✅ Event Flow |
+| App Runner Deployment | ✅ 21 tests | — | — | ✅ Architecture audit |
 
 ---
 
@@ -423,13 +473,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot |
-|--------|-----|-----|------|-----------|-------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner |
+|--------|-----|-----|------|-----------|-------|------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min |
 
 ---
 
@@ -479,8 +529,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/multi-tenant-SaaS-Application` |
-| **Latest PR** | [PR #18](https://github.com/Aterpise-MY/AWS-Projects/pull/18) |
+| **Current Branch** | `feat/app-runner-deployment` |
+| **Latest PR** | [PR #21](https://github.com/Aterpise-MY/AWS-Projects/pull/21) |
 
 ---
 
@@ -494,7 +544,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 20, 2026  
+**Last Updated:** June 21, 2026  
 **Status:** ✅ All projects complete, tested, documented  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 

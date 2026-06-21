@@ -36,8 +36,9 @@ override.tf.json
 # macOS
 .DS_Store
 
-# Claude Code internal files
-.claude/
+# Claude Code internal files (allow CLAUDE.md project instructions)
+.claude/*
+!.claude/CLAUDE.md
 
 # ⚠️ SECURITY: Prevent secrets from being committed
 # Variable files with hardcoded secrets
