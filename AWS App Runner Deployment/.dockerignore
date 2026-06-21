@@ -1,0 +1,12 @@
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate*
+*.tfvars
+terraform.tfvars.example
+*.tf
+README.md
+Dockerfile.example
+Script/
+node_modules/
+.git/
