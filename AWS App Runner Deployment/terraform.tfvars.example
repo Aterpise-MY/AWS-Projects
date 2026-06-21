@@ -1,0 +1,50 @@
+# AWS Region
+aws_region = "us-east-1"
+
+# Project Configuration
+project_name = "my-web-app"
+environment  = "dev"
+
+# App Runner Service Configuration
+service_name       = "my-web-app-service"
+ecr_repository_name = "my-web-app"
+image_tag          = "latest"
+
+# Container Configuration
+container_port = 8080
+
+# CPU and Memory Configuration
+# Valid CPU: 256, 512, 1024, 2048, 4096
+# Valid Memory: 512, 1024, 2048, 3072, 4096
+cpu    = "256"
+memory = "512"
+
+# Auto Scaling Configuration
+min_instances  = 1
+max_instances  = 4
+max_concurrency = 100
+
+# Environment Variables (example)
+environment_variables = {
+  # NODE_ENV = "production"
+  # LOG_LEVEL = "info"
+}
+
+# Environment Secrets (use AWS Secrets Manager ARNs)
+# environment_secrets = {
+#   DATABASE_URL = "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-url-XXXXX"
+# }
+
+# Network Configuration
+is_publicly_accessible = true
+egress_type           = "DEFAULT"
+# vpc_connector_arn     = "arn:aws:apprunner:us-east-1:123456789012:vpcconnector/..."
+
+# CloudWatch Configuration
+log_retention_days      = 7
+cpu_alarm_threshold     = 80
+memory_alarm_threshold  = 80
+
+# Image Configuration
+image_tag_mutability = "MUTABLE"
+enable_image_scanning = true

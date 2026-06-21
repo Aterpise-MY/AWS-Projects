@@ -46,7 +46,6 @@ This portfolio showcases **5 complete AWS infrastructure projects**, each demons
 ### 1. Multi-Tenant SaaS Application
 
 **Location:** `./Multi-Tenant SaaS Application/`  
-**Resume:** `./Resume/5_Multi-Tenant SaaS Application.md`
 
 **Description:**  
 A production-ready multi-tenant SaaS platform with complete tenant isolation at the database layer. Demonstrates serverless architecture, JWT-based authentication, and secure multi-tenancy patterns.
@@ -76,7 +75,6 @@ A production-ready multi-tenant SaaS platform with complete tenant isolation at 
 ### 2. Multi-Tier Web App Deployment
 
 **Location:** `./Multi-Tier Web App Deployment/`  
-**Resume:** `./Resume/4_Multi_Tier_Web_App.md`
 
 **Description:**  
 A classic three-tier web application architecture with web servers, application servers, and a database layer. Demonstrates traditional enterprise architecture with high availability.
@@ -103,7 +101,6 @@ A classic three-tier web application architecture with web servers, application 
 ### 3. Scalable Web App with ALB & Auto Scaling
 
 **Location:** `./Scalable Web App with ALB & Auto Scaling/`  
-**Resume:** `./Resume/2_ALB_Auto_Scaling.md`
 
 **Description:**  
 A highly scalable web application using an Application Load Balancer (ALB) with Layer 7 routing capabilities. Ideal for microservices and content-based routing patterns.
@@ -130,7 +127,6 @@ A highly scalable web application using an Application Load Balancer (ALB) with 
 ### 4. Scalable Web App with NLB & Auto Scaling
 
 **Location:** `./Scalable Web App with NLB & Auto Scaling/`  
-**Resume:** `./Resume/1_NLB_Auto_Scaling.md`
 
 **Description:**  
 An ultra-high-performance web application using a Network Load Balancer (NLB) with extreme throughput and ultra-low latency capabilities. Perfect for real-time APIs and high-frequency trading platforms.
@@ -159,7 +155,6 @@ An ultra-high-performance web application using a Network Load Balancer (NLB) wi
 ### 5. Cloud-Tibot
 
 **Location:** `./Cloud-Tibot/`  
-**Resume:** `./Resume/3_Cloud_Tibot.md`
 
 **Description:**  
 A microservices-based platform for deploying and managing AI agents/bots with event-driven architecture. Demonstrates serverless patterns, Lambda integration, and scalable bot deployment.

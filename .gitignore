@@ -16,8 +16,11 @@ terraform.tfvars
 # Plan output files
 *.tfplan
 *.plan
+tfplan
+tfplan.json
 
-# Crash logs
+# Logs
+*.log
 crash.log
 crash.*.log
 

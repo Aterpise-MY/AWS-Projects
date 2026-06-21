@@ -1,0 +1,53 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Variable files (local overrides)
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# CLI cache
+.terraformrc
+terraform.rc
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.directory
+Thumbs.db
+
+# Logs and outputs
+*.log
+tfplan
+tfplan.json
+
+# Sensitive files
+.env
+.env.local
+*.pem
+*.key
+secrets.json
+
+# Node.js
+node_modules/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
