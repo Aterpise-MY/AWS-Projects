@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **6 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **7 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -39,6 +39,7 @@ This portfolio showcases **6 complete AWS infrastructure projects**, each demons
 | [Scalable Web App (NLB)](#4-scalable-web-app-with-nlb--auto-scaling) | NLB + ASG | High-performance APIs | 12-18 min | $195 |
 | [Cloud-Tibot](#5-cloud-tibot) | Microservices | Bot platforms, agents | Variable | Variable |
 | [AWS App Runner Deployment](#6-aws-app-runner-deployment) | Container | Containerised web apps | 8-12 min | $16-26 |
+| [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
 
 ---
 
@@ -210,6 +211,35 @@ A production-ready containerised web application deployed on AWS App Runner with
 
 ---
 
+### 7. YRC2026 Event Ticket Check-In System
+
+**Location:** `./Event Ticket Check In System/`
+
+**Description:**
+A production-deployed serverless event management system built on AWS for Youth Revival Conference 2026, handling the complete attendee lifecycle: Google Form registration → automated QR code ticket delivery via Gmail API → staff check-in via Google Spreadsheet. Uses an event-driven pipeline (API Gateway → SQS FIFO → Lambda) with usage-limited DynamoDB token authentication, S3 OAuth token persistence, and a hot-swappable email template. Infrastructure fully managed by Terraform across 9 files.
+
+**Architecture:** Google Form → Apps Script → API Gateway → `SubmitGmailSenderSQS` → SQS FIFO → `GmailSender` (Pillow QR composite + Gmail API) → DynamoDB ticket status
+
+**Key Features:**
+- ✅ End-to-end attendee lifecycle automated — registration to HTML QR ticket in <60 s
+- ✅ SQS FIFO decoupling — absorbs form submission bursts, guarantees ordered delivery
+- ✅ S3-backed OAuth token persistence — Gmail credentials survive Lambda cold starts
+- ✅ Email template hot-swap — update HTML template in S3 with zero Lambda redeployment
+- ✅ Usage-limited token auth — DynamoDB atomic counter with TTL, no separate auth service
+- ✅ Bulk send CLI — dry-run preview, CSV import, status filtering, full automation
+- ✅ 8 deployment issues root-caused and documented (OAuth cold start, Pillow memory, visibility timeout, Gmail rate limits, token race condition, S3 public access)
+
+**Tech Stack:** Terraform, API Gateway, SQS FIFO, Lambda (Python 3.11), DynamoDB, S3, Gmail API, Pillow, CloudWatch
+
+**Cost:** ~$0.30 per event (500 attendees)
+
+**Testing:** 8 architecture validation checks across all deployed components
+
+**Links:**
+- 📄 [Full Documentation](Event%20Ticket%20Check%20In%20System/README.md)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -226,7 +256,7 @@ A production-ready containerised web application deployed on AWS App Runner with
 | **Load Balancing** | ALB, NLB, API Gateway |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
-| **Serverless** | Lambda, API Gateway, Cognito, SQS, SNS |
+| **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
 | **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
@@ -250,7 +280,7 @@ A production-ready containerised web application deployed on AWS App Runner with
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 70+ automated tests across all projects  
+✅ **Comprehensive Testing** — 78+ automated tests across all projects  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -382,6 +412,19 @@ AWS Project/                                    # Root portfolio directory
 │   └── Script/
 │       └── test_architecture.sh             # 21-test architecture health check
 │
+├── Event Ticket Check In System/             # Project 7: Serverless Event Ticketing
+│   ├── README.md                            # Full documentation (16 sections)
+│   └── terraform/
+│       ├── provider.tf                      # AWS provider + version constraints
+│       ├── variables.tf                     # Input variables (html_credential sensitive)
+│       ├── sqs.tf                           # SQS FIFO queue
+│       ├── dynamodb.tf                      # Access token + ticket status tables
+│       ├── s3.tf                            # 3 S3 buckets (tokens, templates, QR codes)
+│       ├── iam.tf                           # 3 IAM roles + least-privilege policies
+│       ├── lambda.tf                        # 3 Lambda functions + SQS event source mapping
+│       ├── api_gateway.tf                   # REST API, stage, API key, usage plan
+│       └── outputs.tf                       # 12 outputs (URLs, names, ARNs)
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
@@ -423,14 +466,15 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Scalable Web App (NLB) | ~$195 | EC2 + NLB (70%) | Auto-scaling, scheduled downtime |
 | Cloud-Tibot | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
 | App Runner Deployment | ~$16-26 | App Runner compute | Set min instances to 0 for idle cost reduction |
+| Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
 
-**Total Estimated Cost:** ~$966-1,226/month (all 6 projects running)
+**Total Estimated Cost:** ~$966-1,226/month (all 7 projects running; Event Ticket is <$1/event, not monthly)
 
 ---
 
 ## 🧪 Testing & Validation
 
-**Total Test Coverage:** 70+ automated tests across all projects
+**Total Test Coverage:** 78+ automated tests across all projects
 
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
@@ -440,6 +484,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Scalable Web App (NLB) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Throughput |
 | Cloud-Tibot | ✅ 3 tests | ✅ 10 tests | ✅ 6 tests | ✅ Event Flow |
 | App Runner Deployment | ✅ 21 tests | — | — | ✅ Architecture audit |
+| Event Ticket Check-In | ✅ 8 tests | — | — | ✅ End-to-end delivery |
 
 ---
 
@@ -473,13 +518,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner |
-|--------|-----|-----|------|-----------|-------|------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket |
+|--------|-----|-----|------|-----------|-------|------------|--------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min |
 
 ---
 
@@ -529,8 +574,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/app-runner-deployment` |
-| **Latest PR** | [PR #21](https://github.com/Aterpise-MY/AWS-Projects/pull/21) |
+| **Current Branch** | `feat/event-ticket-check-in-system` |
+| **Latest PR** | [PR #22](https://github.com/Aterpise-MY/AWS-Projects/pull/22) |
 
 ---
 
@@ -544,7 +589,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 21, 2026  
+**Last Updated:** June 22, 2026  
 **Status:** ✅ All projects complete, tested, documented  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
