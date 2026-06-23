@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **7 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **8 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -40,6 +40,7 @@ This portfolio showcases **7 complete AWS infrastructure projects**, each demons
 | [Cloud-Tibot](#5-cloud-tibot) | Microservices | Bot platforms, agents | Variable | Variable |
 | [AWS App Runner Deployment](#6-aws-app-runner-deployment) | Container | Containerised web apps | 8-12 min | $16-26 |
 | [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
+| [GraphQL API with AWS AppSync](#8-graphql-api-with-aws-appsync) | AppSync + DynamoDB | Serverless GraphQL backends | 2-3 min | ~$5/month |
 
 ---
 
@@ -240,6 +241,37 @@ A production-deployed serverless event management system built on AWS for Youth 
 
 ---
 
+### 8. GraphQL API with AWS AppSync
+
+**Location:** `./GraphQL API with AWS AppSync/`
+
+**Description:**
+A fully serverless GraphQL backend using AWS AppSync and Amazon DynamoDB. Terraform provisions an AppSync GraphQL API with API key authentication, five VTL-mapped resolvers for full CRUD operations (getTodos, getTodo, addTodo, updateTodo, deleteTodo), an on-demand DynamoDB table with point-in-time recovery, least-privilege IAM roles, CloudWatch field-level logging, and three metric alarms — all without a VPC, EC2, or load balancer.
+
+**Architecture:** Client (HTTPS) → AppSync (VTL resolvers) → DynamoDB (on-demand)
+
+**Key Features:**
+- ✅ Five VTL resolvers — full CRUD with no Lambda intermediary
+- ✅ Condition guards on mutations — `attribute_exists(id)` prevents silent upserts
+- ✅ Auto-generated UUIDs via `$util.autoId()` in request mapping templates
+- ✅ DynamoDB on-demand capacity — zero capacity planning, scales to zero at rest
+- ✅ Point-in-time recovery enabled — 35-day restore window
+- ✅ Least-privilege IAM — DynamoDB role scoped to exact table ARN; separate CloudWatch Logs role
+- ✅ 3 CloudWatch alarms — 5XX, 4XX error rates and p99 latency
+- ✅ 12-check architecture test script — validates all components and live GraphQL operations
+
+**Tech Stack:** Terraform, AWS AppSync, Amazon DynamoDB, VTL, IAM, CloudWatch
+
+**Cost:** ~$5/month (1M operations); ~$0/month at free-tier scale
+
+**Testing:** 12 architecture validation checks (Terraform state, API, resolvers, data source, API key, DynamoDB, IAM, CloudWatch, 5 live GraphQL operations)
+
+**Links:**
+- 📄 [Full Documentation](GraphQL%20API%20with%20AWS%20AppSync/README.md)
+- 🧪 [Architecture Test Script](GraphQL%20API%20with%20AWS%20AppSync/scripts/test_architecture.sh)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -256,6 +288,7 @@ A production-deployed serverless event management system built on AWS for Youth 
 | **Load Balancing** | ALB, NLB, API Gateway |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
+| **GraphQL** | AWS AppSync, VTL resolvers |
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
 | **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups |
 | **Storage** | S3, EBS, Snapshots |
@@ -280,7 +313,7 @@ A production-deployed serverless event management system built on AWS for Youth 
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 78+ automated tests across all projects  
+✅ **Comprehensive Testing** — 90+ automated tests across all projects  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -425,6 +458,19 @@ AWS Project/                                    # Root portfolio directory
 │       ├── api_gateway.tf                   # REST API, stage, API key, usage plan
 │       └── outputs.tf                       # 12 outputs (URLs, names, ARNs)
 │
+├── GraphQL API with AWS AppSync/             # Project 8: Serverless GraphQL API
+│   ├── README.md                            # Full documentation (14 sections, 8 FAQs)
+│   ├── terraform/
+│   │   ├── provider.tf                      # AWS provider + common_tags local
+│   │   ├── variables.tf                     # 9 input variables with validation
+│   │   ├── dynamodb.tf                      # On-demand table + PITR
+│   │   ├── iam.tf                           # 2 IAM roles + 2 inline policies
+│   │   ├── appsync.tf                       # API, API key, data source, 5 VTL resolvers
+│   │   ├── cloudwatch.tf                    # Log group + 3 metric alarms
+│   │   └── outputs.tf                       # 9 outputs
+│   └── scripts/
+│       └── test_architecture.sh             # 12-check architecture validation script
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
@@ -467,8 +513,9 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Cloud-Tibot | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
 | App Runner Deployment | ~$16-26 | App Runner compute | Set min instances to 0 for idle cost reduction |
 | Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
+| GraphQL API (AppSync) | ~$5/month | AppSync operations ($4/M) | Use free tier for dev; pay-per-request scales to zero |
 
-**Total Estimated Cost:** ~$966-1,226/month (all 7 projects running; Event Ticket is <$1/event, not monthly)
+**Total Estimated Cost:** ~$971-1,231/month (all 8 projects running; Event Ticket is <$1/event; AppSync ~$5/month)
 
 ---
 
@@ -485,6 +532,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Cloud-Tibot | ✅ 3 tests | ✅ 10 tests | ✅ 6 tests | ✅ Event Flow |
 | App Runner Deployment | ✅ 21 tests | — | — | ✅ Architecture audit |
 | Event Ticket Check-In | ✅ 8 tests | — | — | ✅ End-to-end delivery |
+| GraphQL API (AppSync) | ✅ 12 tests | — | — | ✅ Live CRUD operations |
 
 ---
 
@@ -518,13 +566,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket |
-|--------|-----|-----|------|-----------|-------|------------|--------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min |
 
 ---
 
@@ -574,7 +622,7 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/event-ticket-check-in-system` |
+| **Current Branch** | `docs/add-project-7-to-root-readme` |
 | **Latest PR** | [PR #22](https://github.com/Aterpise-MY/AWS-Projects/pull/22) |
 
 ---
@@ -589,7 +637,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 22, 2026  
+**Last Updated:** June 22, 2026 — Project 8 (GraphQL API with AWS AppSync) added  
 **Status:** ✅ All projects complete, tested, documented  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
