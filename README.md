@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **8 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **9 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -41,6 +41,7 @@ This portfolio showcases **8 complete AWS infrastructure projects**, each demons
 | [AWS App Runner Deployment](#6-aws-app-runner-deployment) | Container | Containerised web apps | 8-12 min | $16-26 |
 | [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
 | [GraphQL API with AWS AppSync](#8-graphql-api-with-aws-appsync) | AppSync + DynamoDB | Serverless GraphQL backends | 2-3 min | ~$5/month |
+| [URL Shortener](#9-url-shortener--internal-smart-link-platform) | Lambda + DynamoDB | Internal short link service, click analytics | 2-3 min | ~$1/month |
 
 ---
 
@@ -272,6 +273,37 @@ A fully serverless GraphQL backend using AWS AppSync and Amazon DynamoDB. Terraf
 
 ---
 
+### 9. URL Shortener — Internal Smart Link Platform
+
+**Location:** `./URL Shortener/`
+
+**Description:**
+A fully serverless internal short link platform (`go.techcorp.internal`) built on API Gateway, Lambda, and DynamoDB. Terraform provisions a REST API with three endpoints: `POST /shorten` (create a link with optional custom code, label, TTL expiry), `GET /redirect` (atomic click-count increment + 301 redirect), and `GET /stats` (click analytics per link). DynamoDB TTL auto-expires links at a configured timestamp, returning `410 Gone` for expired codes. Designed for enterprise use cases: all-hands links, onboarding packs, OKR pages, IT help portals.
+
+**Architecture:** API Gateway (Regional) → Lambda (Python 3.11) → DynamoDB (on-demand, TTL on `expires_at`)
+
+**Key Features:**
+- ✅ DynamoDB TTL auto-expiry — links expire at a configured timestamp; expired links return `410 Gone`
+- ✅ Custom short codes — human-readable codes (`go/hr`, `go/q3-okr`) with `409 Conflict` on collision
+- ✅ Click analytics — atomic `click_count` increment and `last_accessed` timestamp on every redirect
+- ✅ Three live endpoints — `POST /shorten`, `GET /redirect`, `GET /stats` with full error handling
+- ✅ Least-privilege IAM — Lambda role scoped to exact table ARN; separate CloudWatch Logs policy
+- ✅ Structured API access logs — JSON per request in CloudWatch for security monitoring
+- ✅ 3 CloudWatch alarms — Lambda errors, API 5XX, API 4XX (high 4XX may indicate abuse)
+- ✅ 16-check test script — Terraform state, DynamoDB TTL, Lambda, IAM, API Gateway resources, 6 live API scenarios
+
+**Tech Stack:** Terraform, API Gateway (REST), Lambda (Python 3.11), DynamoDB (on-demand + TTL), IAM, CloudWatch
+
+**Cost:** ~$1/month (100K requests); ~$0.30/month at rest (alarms only); ~$0/month at zero traffic
+
+**Testing:** 16 architecture validation checks (infrastructure + live create / redirect / stats / conflict / missing / click-count)
+
+**Links:**
+- 📄 [Full Documentation](URL%20Shortener/README.md)
+- 🧪 [Architecture Test Script](URL%20Shortener/scripts/test_architecture.sh)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -290,6 +322,7 @@ A fully serverless GraphQL backend using AWS AppSync and Amazon DynamoDB. Terraf
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
 | **GraphQL** | AWS AppSync, VTL resolvers |
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
+| **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
 | **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
@@ -313,7 +346,7 @@ A fully serverless GraphQL backend using AWS AppSync and Amazon DynamoDB. Terraf
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 90+ automated tests across all projects  
+✅ **Comprehensive Testing** — 106+ automated tests across all projects  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -471,6 +504,22 @@ AWS Project/                                    # Root portfolio directory
 │   └── scripts/
 │       └── test_architecture.sh             # 12-check architecture validation script
 │
+├── URL Shortener/                            # Project 9: Serverless URL Shortener
+│   ├── README.md                            # Full documentation (14 sections, 6 FAQs)
+│   ├── lambda/
+│   │   └── handler.py                       # Single-file Lambda — /shorten, /redirect, /stats
+│   ├── terraform/
+│   │   ├── provider.tf                      # AWS + archive providers; common_tags local
+│   │   ├── variables.tf                     # 8 input variables with validation
+│   │   ├── dynamodb.tf                      # On-demand table, TTL on expires_at, PITR
+│   │   ├── iam.tf                           # Lambda execution role + 2 inline policies
+│   │   ├── lambda.tf                        # archive_file, aws_lambda_function, permission
+│   │   ├── api_gateway.tf                   # REST API, 3 resources, deployment, v1 stage
+│   │   ├── cloudwatch.tf                    # 2 log groups + 3 metric alarms
+│   │   └── outputs.tf                       # 10 outputs (URLs, table name, ARNs)
+│   └── scripts/
+│       └── test_architecture.sh             # 16-check validation + 6 live API scenarios
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
@@ -514,8 +563,9 @@ All projects follow **AWS Well-Architected Framework** principles:
 | App Runner Deployment | ~$16-26 | App Runner compute | Set min instances to 0 for idle cost reduction |
 | Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
 | GraphQL API (AppSync) | ~$5/month | AppSync operations ($4/M) | Use free tier for dev; pay-per-request scales to zero |
+| URL Shortener | ~$1/month | API Gateway ($0.35/100K) | Scales to $0 at zero traffic; alarms ~$0.30/month |
 
-**Total Estimated Cost:** ~$971-1,231/month (all 8 projects running; Event Ticket is <$1/event; AppSync ~$5/month)
+**Total Estimated Cost:** ~$972-1,232/month (all 9 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month)
 
 ---
 
@@ -533,6 +583,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | App Runner Deployment | ✅ 21 tests | — | — | ✅ Architecture audit |
 | Event Ticket Check-In | ✅ 8 tests | — | — | ✅ End-to-end delivery |
 | GraphQL API (AppSync) | ✅ 12 tests | — | — | ✅ Live CRUD operations |
+| URL Shortener | ✅ 16 tests | — | — | ✅ Live create / redirect / stats / conflict |
 
 ---
 
@@ -566,13 +617,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min |
 
 ---
 
@@ -622,7 +673,7 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `docs/add-project-7-to-root-readme` |
+| **Current Branch** | `feat/graphql-api-appsync` |
 | **Latest PR** | [PR #22](https://github.com/Aterpise-MY/AWS-Projects/pull/22) |
 
 ---
