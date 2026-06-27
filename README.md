@@ -12,7 +12,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 4. [Technology Stack](#technology-stack)
 5. [Key Achievements](#key-achievements)
 6. [Getting Started](#getting-started)
-8. [Repository Structure](#repository-structure)
+7. [Repository Structure](#repository-structure)
 
 ---
 
@@ -733,7 +733,7 @@ These projects are provided as educational and portfolio materials.
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
 | **Current Branch** | `feat/realtime-polling-app` |
-| **Latest PR** | [PR #26](https://github.com/Aterpise-MY/AWS-Projects/pull/26) |
+| **Latest PR** | [PR #27](https://github.com/Aterpise-MY/AWS-Projects/pull/27) |
 
 ---
 
