@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **9 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **10 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -42,6 +42,7 @@ This portfolio showcases **9 complete AWS infrastructure projects**, each demons
 | [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
 | [GraphQL API with AWS AppSync](#8-graphql-api-with-aws-appsync) | AppSync + DynamoDB | Serverless GraphQL backends | 2-3 min | ~$5/month |
 | [URL Shortener](#9-url-shortener--internal-smart-link-platform) | Lambda + DynamoDB | Internal short link service, click analytics | 2-3 min | ~$1/month |
+| [Real-time Polling App](#10-real-time-polling-app--e-commerce-edition) | WebSocket + Lambda | Live voting, flash sales, design surveys | 3-4 min | ~$5/event |
 
 ---
 
@@ -304,6 +305,38 @@ A fully serverless internal short link platform (`go.techcorp.internal`) built o
 
 ---
 
+### 10. Real-time Polling App — E-Commerce Edition
+
+**Location:** `./Real-time Polling App/`
+
+**Description:**
+A fully serverless real-time polling and interaction platform built on an API Gateway WebSocket API, Lambda, and DynamoDB. One WebSocket backbone powers four interaction types — general poll voting plus three e-commerce scenarios: live-stream product voting, flash-sale inventory tracking, and new-product design surveys. Clients open one persistent connection scoped by `sessionId`; votes and purchases are written atomically to DynamoDB and fanned out to every connected client in the session in real time.
+
+**Architecture:** Client (wss://) → API Gateway WebSocket API → 6 Lambda functions (Python 3.11) → 5 DynamoDB tables (Connections GSI fan-out)
+
+**Key Features:**
+- ✅ Single WebSocket backbone — `$request.body.action` route selection across 7 routes
+- ✅ Real-time fan-out — Connections `sessionId-index` GSI + `PostToConnection` to all session clients
+- ✅ Atomic vote counting — DynamoDB `UpdateExpression ADD` (lost-update-free under concurrency)
+- ✅ Oversell-proof flash sale — `ConditionExpression: remainingStock > 0`; depletion returns `sold_out` to buyer only
+- ✅ Session/survey guards — conditional writes reject votes once a session ends or survey closes
+- ✅ Auto-pruned connections — `$disconnect` delete + DynamoDB TTL + 410 Gone cleanup on stale fan-out
+- ✅ Least-privilege IAM — scoped to 5 tables, the GSI, and the stage's `@connections/*`
+- ✅ 7 CloudWatch alarms (6 Lambda error + 1 integration error) + per-function log groups
+
+**Tech Stack:** Terraform, API Gateway WebSocket (v2), Lambda (Python 3.11), DynamoDB (on-demand + GSI + TTL), IAM, CloudWatch
+
+**Cost:** ~$5 per event (10k viewers, 30 min, ~500k messages); ~$0.70/month at rest
+
+**Testing:** Architecture validation script across DynamoDB, Lambda, IAM, WebSocket routes, and CloudWatch
+
+**Links:**
+- 📄 [Full Documentation](Real-time%20Polling%20App/README.md)
+- 📊 [Live Audit Results](Real-time%20Polling%20App/Result.md)
+- 🧪 [Architecture Test Script](Real-time%20Polling%20App/scripts/test_architecture.sh)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -323,6 +356,7 @@ A fully serverless internal short link platform (`go.techcorp.internal`) built o
 | **GraphQL** | AWS AppSync, VTL resolvers |
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
+| **Real-time / WebSocket** | API Gateway WebSocket (v2), Lambda, DynamoDB GSI fan-out |
 | **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
@@ -346,7 +380,7 @@ A fully serverless internal short link platform (`go.techcorp.internal`) built o
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 106+ automated tests across all projects  
+✅ **Comprehensive Testing** — 130+ automated tests across all projects  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -520,6 +554,29 @@ AWS Project/                                    # Root portfolio directory
 │   └── scripts/
 │       └── test_architecture.sh             # 16-check validation + 6 live API scenarios
 │
+├── Real-time Polling App/                    # Project 10: WebSocket real-time polling
+│   ├── README.md                            # Full documentation (14 sections, 6 FAQs)
+│   ├── Result.md                            # Live audit (50 resources, E2E fan-out + oversell tests)
+│   ├── lambda/
+│   │   ├── _broadcast.py                    # Shared fan-out helper (GSI query + PostToConnection)
+│   │   ├── manage_connections.py            # $connect / $disconnect
+│   │   ├── handle_vote.py                   # sendVote
+│   │   ├── broadcast_results.py             # broadcastResults
+│   │   ├── handle_livestream_vote.py        # liveVote (Scenario 1)
+│   │   ├── handle_flashsale_update.py       # flashPurchase (Scenario 2)
+│   │   └── handle_design_vote.py            # designVote (Scenario 3)
+│   ├── terraform/
+│   │   ├── provider.tf                      # AWS + archive providers; caller identity
+│   │   ├── variables.tf                     # 9 input variables with validation
+│   │   ├── dynamodb.tf                      # 5 tables (Connections GSI + TTLs)
+│   │   ├── iam.tf                           # Execution role + 3 inline policies
+│   │   ├── lambda.tf                        # Single zip, 6 functions (for_each)
+│   │   ├── apigateway.tf                    # WebSocket API, 6 integrations, 7 routes, stage
+│   │   ├── cloudwatch.tf                    # 7 log groups + 7 alarms
+│   │   └── outputs.tf                       # WebSocket URL, mgmt endpoint, table map
+│   └── scripts/
+│       └── test_architecture.sh             # 24-check architecture validation
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
@@ -564,8 +621,9 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
 | GraphQL API (AppSync) | ~$5/month | AppSync operations ($4/M) | Use free tier for dev; pay-per-request scales to zero |
 | URL Shortener | ~$1/month | API Gateway ($0.35/100K) | Scales to $0 at zero traffic; alarms ~$0.30/month |
+| Real-time Polling App | ~$5/event | DynamoDB on-demand + WebSocket messages | Idle connections auto-expire; ~$0.70/month at rest |
 
-**Total Estimated Cost:** ~$972-1,232/month (all 9 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month)
+**Total Estimated Cost:** ~$973-1,233/month (all 10 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event)
 
 ---
 
@@ -584,6 +642,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Event Ticket Check-In | ✅ 8 tests | — | — | ✅ End-to-end delivery |
 | GraphQL API (AppSync) | ✅ 12 tests | — | — | ✅ Live CRUD operations |
 | URL Shortener | ✅ 16 tests | — | — | ✅ Live create / redirect / stats / conflict |
+| Real-time Polling App | ✅ 24 tests | — | — | ✅ WebSocket routes / GSI fan-out / atomic writes |
 
 ---
 
@@ -617,13 +676,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min |
 
 ---
 
@@ -673,8 +732,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/graphql-api-appsync` |
-| **Latest PR** | [PR #22](https://github.com/Aterpise-MY/AWS-Projects/pull/22) |
+| **Current Branch** | `feat/realtime-polling-app` |
+| **Latest PR** | [PR #26](https://github.com/Aterpise-MY/AWS-Projects/pull/26) |
 
 ---
 
@@ -688,7 +747,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 22, 2026 — Project 8 (GraphQL API with AWS AppSync) added  
+**Last Updated:** June 27, 2026 — Project 10 (Real-time Polling App — E-Commerce Edition) added  
 **Status:** ✅ All projects complete, tested, documented  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 

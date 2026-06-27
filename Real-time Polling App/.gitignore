@@ -1,0 +1,7 @@
+lambda/build/
+lambda/__pycache__/
+**/__pycache__/
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform.lock.hcl
