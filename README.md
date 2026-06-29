@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **10 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **11 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -43,6 +43,7 @@ This portfolio showcases **10 complete AWS infrastructure projects**, each demon
 | [GraphQL API with AWS AppSync](#8-graphql-api-with-aws-appsync) | AppSync + DynamoDB | Serverless GraphQL backends | 2-3 min | ~$5/month |
 | [URL Shortener](#9-url-shortener--internal-smart-link-platform) | Lambda + DynamoDB | Internal short link service, click analytics | 2-3 min | ~$1/month |
 | [Real-time Polling App](#10-real-time-polling-app--e-commerce-edition) | WebSocket + Lambda | Live voting, flash sales, design surveys | 3-4 min | ~$5/event |
+| [Zendesk Ticket Triage](#11-serverless-zendesk-ticket-triage-with-sentiment-analysis) | Lambda + Comprehend | Helpdesk sentiment triage, SLA protection | 2-3 min | ~$4/month |
 
 ---
 
@@ -337,6 +338,38 @@ A fully serverless real-time polling and interaction platform built on an API Ga
 
 ---
 
+### 11. Serverless Zendesk Ticket Triage with Sentiment Analysis
+
+**Location:** `./Zendesk Ticket Triage with Sentiment Analysis/`
+
+**Description:**
+A fully serverless pipeline that scores the sentiment of every incoming Zendesk ticket in real time and triages it automatically back inside Zendesk. A Zendesk trigger fires an HMAC-signed webhook to API Gateway; a Python 3.11 Lambda verifies the signature, runs AWS Comprehend sentiment detection, applies triage rules (negative + high confidence → `priority: urgent` + escalation group), writes an audit record to DynamoDB, calls the Zendesk Tickets API to set priority/tag/group, and publishes an SNS alert on escalation. Surfaces at-risk customers in minutes instead of leaving them buried in a flat queue, while auto-handling positive/neutral tickets.
+
+**Architecture:** Zendesk (HMAC webhook) → API Gateway → Lambda (Python 3.11) → Comprehend + DynamoDB + SNS + Zendesk Tickets API
+
+**Key Features:**
+- ✅ HMAC-SHA256 webhook authentication — signature verified in Lambda before any billable call; failed sigs return `401`
+- ✅ AWS Comprehend sentiment scoring — real-time `DetectSentiment` with per-class confidence
+- ✅ Confidence-gated triage — `NEGATIVE ≥ 0.80` → `urgent` + escalation group + SNS alert; borderline → `high` + `review`
+- ✅ Write-back into Zendesk — `additional_tags` (non-destructive) + priority + group_id via the Tickets API over `urllib`
+- ✅ Secrets never in state — Secrets Manager placeholder seeded; real creds injected via `put-secret-value` with `ignore_changes`
+- ✅ DynamoDB `SentimentAnalysis` audit table — `TicketID` + `CreatedAt`, on-demand, PITR enabled
+- ✅ Least-privilege IAM — 5 inline policies, each scoped to one resource ARN / the single Comprehend action
+- ✅ 13-check test script — every resource plus a locally-signed live triage invoke (verified NEGATIVE @ 99.81% → urgent)
+
+**Tech Stack:** Terraform, API Gateway (REST), Lambda (Python 3.11), AWS Comprehend, DynamoDB (on-demand + PITR), SNS, Secrets Manager, IAM, CloudWatch
+
+**Cost:** ~$3.89/month (10K tickets; Comprehend dominates); ~$0.70/month at rest (alarms + secret)
+
+**Testing:** 13 architecture validation checks (DynamoDB, Lambda, IAM, SNS, Secrets, API Gateway, CloudWatch, live signed triage)
+
+**Links:**
+- 📄 [Full Documentation](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/README.md)
+- 📊 [Live Audit Results](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/Result.md)
+- 🧪 [Architecture Test Script](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/scripts/test_architecture.sh)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -357,7 +390,8 @@ A fully serverless real-time polling and interaction platform built on an API Ga
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
 | **Real-time / WebSocket** | API Gateway WebSocket (v2), Lambda, DynamoDB GSI fan-out |
-| **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups |
+| **AI / NLP** | AWS Comprehend (DetectSentiment) — real-time ticket sentiment triage |
+| **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups, HMAC webhook verification |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
 | **Management** | Terraform, Systems Manager, CloudTrail |
@@ -577,6 +611,25 @@ AWS Project/                                    # Root portfolio directory
 │   └── scripts/
 │       └── test_architecture.sh             # 24-check architecture validation
 │
+├── Zendesk Ticket Triage with Sentiment Analysis/ # Project 11: Comprehend sentiment triage
+│   ├── README.md                            # Full documentation (14 sections, 7 FAQs)
+│   ├── Result.md                            # Live audit (23 resources, signed live triage test)
+│   ├── lambda/
+│   │   └── handler.py                       # HMAC verify, Comprehend, DynamoDB, Zendesk API, SNS
+│   ├── terraform/
+│   │   ├── provider.tf                      # AWS + archive providers; common_tags local
+│   │   ├── variables.tf                     # 14 input variables with validation
+│   │   ├── dynamodb.tf                      # SentimentAnalysis table (TicketID + CreatedAt), PITR
+│   │   ├── sns.tf                           # Negative-alert topic + optional email subscription
+│   │   ├── secrets.tf                       # Zendesk credentials secret (placeholder seeded)
+│   │   ├── iam.tf                           # Execution role + 5 inline policies
+│   │   ├── lambda.tf                        # archive_file, aws_lambda_function, permission
+│   │   ├── api_gateway.tf                   # REST API, /webhook resource, deployment, v1 stage
+│   │   ├── cloudwatch.tf                    # 2 log groups + 3 metric alarms
+│   │   └── outputs.tf                       # 10 outputs (webhook URL, table, ARNs, topic, secret)
+│   └── scripts/
+│       └── test_architecture.sh             # 13-check validation + signed live triage test
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_NLB_Auto_Scaling.md
 │   ├── 2_ALB_Auto_Scaling.md
@@ -622,14 +675,15 @@ All projects follow **AWS Well-Architected Framework** principles:
 | GraphQL API (AppSync) | ~$5/month | AppSync operations ($4/M) | Use free tier for dev; pay-per-request scales to zero |
 | URL Shortener | ~$1/month | API Gateway ($0.35/100K) | Scales to $0 at zero traffic; alarms ~$0.30/month |
 | Real-time Polling App | ~$5/event | DynamoDB on-demand + WebSocket messages | Idle connections auto-expire; ~$0.70/month at rest |
+| Zendesk Ticket Triage | ~$4/month | AWS Comprehend ($0.0001/unit, min 3/req) | Scales with ticket volume; ~$0.70/month at rest (alarms + secret) |
 
-**Total Estimated Cost:** ~$973-1,233/month (all 10 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event)
+**Total Estimated Cost:** ~$977-1,237/month (all 11 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
 
 ---
 
 ## 🧪 Testing & Validation
 
-**Total Test Coverage:** 78+ automated tests across all projects
+**Total Test Coverage:** 91+ automated tests across all projects
 
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
@@ -643,6 +697,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | GraphQL API (AppSync) | ✅ 12 tests | — | — | ✅ Live CRUD operations |
 | URL Shortener | ✅ 16 tests | — | — | ✅ Live create / redirect / stats / conflict |
 | Real-time Polling App | ✅ 24 tests | — | — | ✅ WebSocket routes / GSI fan-out / atomic writes |
+| Zendesk Ticket Triage | ✅ 13 tests | — | — | ✅ Live signed webhook → Comprehend → urgent triage |
 
 ---
 
@@ -676,13 +731,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min |
 
 ---
 
@@ -732,8 +787,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/realtime-polling-app` |
-| **Latest PR** | [PR #27](https://github.com/Aterpise-MY/AWS-Projects/pull/27) |
+| **Current Branch** | `feat/zendesk-ticket-triage` |
+| **Latest PR** | [PR #28](https://github.com/Aterpise-MY/AWS-Projects/pull/28) |
 
 ---
 
@@ -747,7 +802,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 27, 2026 — Project 10 (Real-time Polling App — E-Commerce Edition) added  
+**Last Updated:** June 29, 2026 — Project 11 (Serverless Zendesk Ticket Triage with Sentiment Analysis) added  
 **Status:** ✅ All projects complete, tested, documented  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
