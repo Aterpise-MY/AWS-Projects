@@ -1,0 +1,47 @@
+# Non-secret Phase 0 configuration. All values here are also defaults in
+# variables.tf; this file makes the deployment explicit. NO secrets.
+region             = "ap-southeast-1"
+project            = "mcf-srid"
+environment        = "prod"
+cost_center        = "MCF-IT-Ops"
+availability_zones = ["ap-southeast-1a", "ap-southeast-1b"]
+
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_cidrs = ["10.20.0.0/24", "10.20.1.0/24"]
+app_subnet_cidrs    = ["10.20.10.0/24", "10.20.11.0/24"]
+data_subnet_cidrs   = ["10.20.20.0/24", "10.20.21.0/24"]
+
+single_nat_gateway = true
+kms_alias          = "alias/mcf-srid"
+
+# --- Phase 3: Dashboard compute (ECS Fargate + ALB) ------------------------
+container_cpu      = 256
+container_memory   = 512
+desired_count      = 1
+log_retention_days = 30
+image_tag          = "latest"
+alb_listener_port  = 80 # 443 for HTTPS (requires an ACM cert + a domain)
+
+# Plain-HTTP demo ingress on the ALB SG. NARROW office_cidr to the MCF office
+# egress CIDR since Phase 3 ships unauthenticated.
+enable_http_ingress = true
+# office_cidr       = "203.0.113.0/24"  # example — replace with the office CIDR
+office_cidr = "0.0.0.0/0"
+
+# --- Phase 4: Authentication (Cognito) -------------------------------------
+# cognito_domain_prefix   = "mcf-srid-prod"   # globally unique across AWS
+# cognito_callback_urls   = ["https://dashboard.example.com/oauth2/idpresponse"]
+alb_https_enabled       = false
+enable_cognito_alb_auth = false # requires alb_https_enabled = true
+
+# --- Phase 5: Notifications (SES + EventBridge) ----------------------------
+enable_notifications = false # requires verified SES identities
+# ses_sender_email     = "alerts@mcf.example.com"
+# ses_recipient_emails = ["facilities@mcf.example.com"]
+notification_schedule = "cron(30 8,20 * * ? *)"
+
+# --- Phase 6: Observability ------------------------------------------------
+# alarm_email = "ops@mcf.example.com"
+enable_ad_connector = false # requires on-prem VPN + populated bind secret
+# ad_directory_name = "corp.mcf.local"
+# ad_dns_ips        = ["10.247.0.10", "10.247.0.11"]

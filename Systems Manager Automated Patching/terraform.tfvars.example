@@ -1,0 +1,47 @@
+# terraform.tfvars.example
+# Copy to terraform.tfvars and adjust, then:
+#   terraform plan
+#   terraform apply     # (deploy only after Boss approves the footprint)
+
+region       = "us-east-1"
+project_name = "ssm-patching"
+environment  = "prod"
+application  = "revenue-cycle-platform"
+
+# Self-contained VPC (no default-VPC dependency)
+vpc_cidr           = "10.20.0.0/16"
+public_subnet_cidr = "10.20.1.0/24"
+
+# TOTAL demo instances, distributed round-robin across patch_groups.
+# 2 => one Amazon Linux 2023 (prod-al2023) + one Ubuntu 22.04 (prod-ubuntu).
+instance_count = 2
+
+# Per-OS patch group definitions. The `patch_group` value is written to the
+# reserved `Patch Group` instance tag and MUST match the window target filter.
+patch_groups = {
+  al2023 = {
+    patch_group   = "prod-al2023"
+    os_family     = "amazon-linux-2023"
+    instance_type = "t3.micro"
+  }
+  ubuntu = {
+    patch_group   = "prod-ubuntu"
+    os_family     = "ubuntu-22.04"
+    instance_type = "t3.micro"
+  }
+}
+
+# Patch policy
+approve_after_days = 7
+
+# Maintenance windows (UTC, staggered)
+al2023_schedule       = "cron(0 2 ? * SUN *)"
+ubuntu_schedule       = "cron(0 3 ? * SUN *)"
+window_duration_hours = 2
+window_cutoff_hours   = 1
+max_concurrency       = "25%"
+max_errors            = "2"
+
+# Optional: subscribe an email to patch-alerts (must confirm via email link).
+# alert_email = "patch-ops@meridianhealth.example"
+alert_email = ""
