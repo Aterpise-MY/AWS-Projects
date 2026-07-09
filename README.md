@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **11 complete AWS infrastructure projects**, each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **13 AWS infrastructure projects** — 11 deployed and tested, plus 2 (Server Room Inspection Dashboard and Systems Manager Automated Patching) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -44,6 +44,10 @@ This portfolio showcases **11 complete AWS infrastructure projects**, each demon
 | [URL Shortener](#9-url-shortener--internal-smart-link-platform) | Lambda + DynamoDB | Internal short link service, click analytics | 2-3 min | ~$1/month |
 | [Real-time Polling App](#10-real-time-polling-app--e-commerce-edition) | WebSocket + Lambda | Live voting, flash sales, design surveys | 3-4 min | ~$5/event |
 | [Zendesk Ticket Triage](#11-serverless-zendesk-ticket-triage-with-sentiment-analysis) | Lambda + Comprehend | Helpdesk sentiment triage, SLA protection | 2-3 min | ~$4/month |
+| [Server Room Inspection Dashboard](#12-server-room-inspection-dashboard) | ECS Fargate + RDS | Internal ops dashboards, legacy rebuilds | 15-20 min | ~$92/month* |
+| [Systems Manager Automated Patching](#13-systems-manager-automated-patching) | SSM Patch Manager | Fleet OS patching, compliance SLAs | 10-15 min | ~$24/month* |
+
+> *Authored and `terraform validate`-clean; not currently deployed ($0 while destroyed).
 
 ---
 
@@ -370,6 +374,66 @@ A fully serverless pipeline that scores the sentiment of every incoming Zendesk 
 
 ---
 
+### 12. Server Room Inspection Dashboard
+
+**Location:** `./Server Room Inspection Dashboard/`
+
+**Description:**
+An AWS-native, phase-gated rebuild of a Malaysian corporate factory's (MCF) legacy Power Automate + Ubuntu/EC2 server-room inspection system, delivered as a read-only operational dashboard for Facilities staff. Built as gated Phases 0-6 composed into a single Terraform root module: a 3-tier / 2-AZ VPC → internet-facing ALB → single-task ECS Fargate (Flask + gunicorn) → private RDS PostgreSQL 16.14, wrapped with one reused KMS CMK, three Secrets Manager placeholders, reference-wired security groups, Cognito authentication, SES/EventBridge breach notifications, and CloudWatch/SNS observability plus a deploy-ready AD Connector. Targets account `022499047467` in `ap-southeast-1` under the prefix `mcf-srid-prod`.
+
+**Architecture:** Internet → IGW → ALB (public) → ECS Fargate (private-app) → RDS PostgreSQL (private-data)
+
+**Key Features:**
+- ✅ 12-module phased build (Phases 0-6) composed into a single Terraform root module
+- ✅ Reference-wired security groups — `ALB → app:8080 → data:5432` enforced by SG identity, not CIDR
+- ✅ Single customer-managed KMS CMK across RDS, ECR, CloudWatch Logs, secrets, and the Glue bucket
+- ✅ `count`/`for_each` gating for HTTP/HTTPS, Cognito auth, SES, and AD Connector — default apply stays clean and cheap
+- ✅ Least-privilege DB access — `srid_app` SELECT-only role; runtime secret fetch via the ECS task role
+- ✅ 2,924-row synthetic dataset loaded via a Glue Python-shell backfill job
+- ✅ `terraform validate`-clean across all 12 modules (~93 authored resource blocks)
+
+**Tech Stack:** Terraform, VPC, ALB, ECS Fargate, ECR, RDS PostgreSQL, KMS, Secrets Manager, Cognito, SES, EventBridge, AWS Glue, CloudWatch, SNS, Directory Service
+
+**Cost:** ~$92/month (default demo path; NAT Gateway is the largest fixed cost) — $0 while destroyed
+
+**Status:** Authored & `terraform validate`-clean; not yet deployed (destroyed to control cost)
+
+**Links:**
+- 📄 [Full Documentation](Server%20Room%20Inspection%20Dashboard/README.md)
+- 📝 [Resume Summary](Resume/12_Server_Room_Inspection_Dashboard.md)
+
+---
+
+### 13. Systems Manager Automated Patching
+
+**Location:** `./Systems Manager Automated Patching/`
+
+**Description:**
+An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22.04 fleet, built entirely on AWS Systems Manager and Terraform for a healthcare revenue-cycle workload (Meridian Health Partners) under a Critical-CVE ≤ 7-day VM-SLA. Stands up a self-contained VPC, SSM-managed EC2 targets, per-OS Patch Baselines, staggered weekly Maintenance Windows, and `AWS-RunPatchBaseline` Run Command tasks that install approved patches in bounded waves, with SNS alerting on failure.
+
+**Architecture:** SSM cron → Maintenance Windows → `AWS-RunPatchBaseline` → EC2 (targeted by `Patch Group` tag) → SNS alerts
+
+**Key Features:**
+- ✅ Per-OS Patch Baselines — AL2023 (`CLASSIFICATION` + `SEVERITY`) and Ubuntu (`PRIORITY` + `SECTION`) via each OS's native filter surface
+- ✅ 7-day auto-approval delay encodes the Critical-CVE VM-SLA
+- ✅ Bounded blast radius — `max_concurrency = 25%` + a 2-error budget per wave
+- ✅ Staggered windows (02:00 / 03:00 UTC) isolate OS-specific failures
+- ✅ Patch exceptions as change control — `ansible` BLOCK-rejected, `openssl` fast-tracked
+- ✅ Egress-only SG (no inbound), IMDSv2 required, encrypted gp3, AMIs via SSM public parameters
+- ✅ SNS `patch-alerts` on `Failed` / `TimedOut` task events
+
+**Tech Stack:** Terraform, AWS Systems Manager (Patch Manager, Maintenance Windows, Run Command), EC2, IAM, SNS, VPC
+
+**Cost:** ~$24/month (2 × `t3.micro` default footprint) — $0 while destroyed
+
+**Status:** Authored & `terraform validate`-clean; not yet deployed
+
+**Links:**
+- 📄 [Full Documentation](Systems%20Manager%20Automated%20Patching/README.md)
+- 📝 [Resume Summary](Resume/13_Systems_Manager_Automated_Patching.md)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -391,7 +455,12 @@ A fully serverless pipeline that scores the sentiment of every incoming Zendesk 
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
 | **Real-time / WebSocket** | API Gateway WebSocket (v2), Lambda, DynamoDB GSI fan-out |
 | **AI / NLP** | AWS Comprehend (DetectSentiment) — real-time ticket sentiment triage |
-| **Security** | KMS, Secrets Manager, IAM, WAF (optional), Security Groups, HMAC webhook verification |
+| **Containers / Orchestration** | ECS Fargate, ECR (scan-on-push), ALB target-type IP |
+| **Identity / Auth** | Cognito (user pool + hosted UI + OIDC), Directory Service (AD Connector) |
+| **Data / ETL** | AWS Glue (Python-shell backfill), RDS PostgreSQL 16 |
+| **Patch Management** | Systems Manager Patch Manager, Maintenance Windows, Run Command (`AWS-RunPatchBaseline`) |
+| **Notifications** | Amazon SES, EventBridge (scheduled breach digests) |
+| **Security** | KMS (customer-managed CMK), Secrets Manager, IAM, WAF (optional), Security Groups, HMAC webhook verification |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
 | **Management** | Terraform, Systems Manager, CloudTrail |
@@ -630,13 +699,42 @@ AWS Project/                                    # Root portfolio directory
 │   └── scripts/
 │       └── test_architecture.sh             # 13-check validation + signed live triage test
 │
+├── Server Room Inspection Dashboard/         # Project 12: ECS Fargate ops dashboard (Phases 0-6)
+│   ├── README.md                            # Whole architecture (Phases 0-6)
+│   ├── PHASE1_RDS_SCOPE.md                   # Phase 1 RDS design artifact
+│   ├── PHASE3_DASHBOARD_DESIGN.md            # Approved dashboard + compute design
+│   ├── database/                            # SQL DDL, migration Lambda, Glue backfill (2,924-row CSV)
+│   └── terraform/
+│       ├── main.tf                          # Root wiring for all 12 modules
+│       ├── variables.tf / outputs.tf        # Root inputs / outputs (all phases)
+│       ├── provider.tf / versions.tf / backend.tf
+│       ├── bootstrap/                       # Creates the S3 remote-state bucket
+│       └── modules/                         # networking, security, kms, iam, secrets, database,
+│                                            #   migration, glue, compute, cognito, notifications, observability
+│
+├── Systems Manager Automated Patching/       # Project 13: SSM Patch Manager
+│   ├── README.md                            # Full documentation (14 sections)
+│   ├── main.tf                              # VPC, IAM, SG, EC2 targets, baselines, windows, tasks, SNS
+│   ├── variables.tf                         # Inputs with validation (patch_groups, schedules)
+│   ├── outputs.tf                           # VPC/instance IDs, role ARNs, baseline & window IDs
+│   ├── versions.tf                          # Terraform >= 1.5, AWS ~> 5.0, default_tags
+│   ├── terraform.tfvars.example             # Configuration template
+│   └── .gitignore                           # Excludes state, .terraform/, *.tfvars
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
-│   ├── 1_NLB_Auto_Scaling.md
-│   ├── 2_ALB_Auto_Scaling.md
+│   ├── 1_ALB_Auto_Scaling.md
+│   ├── 2_NLB_Auto_Scaling.md
 │   ├── 3_Cloud_Tibot.md
 │   ├── 4_Multi_Tier_Web_App.md
 │   ├── 5_Multi-Tenant SaaS Application.md
-│   └── 6_App_Runner_Deployment.md
+│   ├── 6_App_Runner_Deployment.md
+│   ├── 7_Event_Ticket_Check_In_System.md
+│   ├── 8_GraphQL_AppSync.md
+│   ├── 9_URL_Shortener.md
+│   ├── 10_Zendesk_Ticket_Triage.md
+│   ├── 11_Real_time_Polling_App.md
+│   ├── 12_Server_Room_Inspection_Dashboard.md
+│   └── 13_Systems_Manager_Automated_Patching.md
 │
 ├── .github/
 │   └── workflows/                            # CI/CD pipelines
@@ -676,8 +774,12 @@ All projects follow **AWS Well-Architected Framework** principles:
 | URL Shortener | ~$1/month | API Gateway ($0.35/100K) | Scales to $0 at zero traffic; alarms ~$0.30/month |
 | Real-time Polling App | ~$5/event | DynamoDB on-demand + WebSocket messages | Idle connections auto-expire; ~$0.70/month at rest |
 | Zendesk Ticket Triage | ~$4/month | AWS Comprehend ($0.0001/unit, min 3/req) | Scales with ticket volume; ~$0.70/month at rest (alarms + secret) |
+| Server Room Inspection Dashboard* | ~$92/month | NAT Gateway + ALB + RDS + Fargate | Single shared NAT, single-AZ RDS; $0 while destroyed |
+| Systems Manager Automated Patching* | ~$24/month | EC2 (2 × t3.micro) + public IPv4 | SSM/Maintenance Windows free; stop instances between windows; $0 while destroyed |
 
-**Total Estimated Cost:** ~$977-1,237/month (all 11 projects running; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
+> *Authored & `terraform validate`-clean; not currently deployed, so it bills $0 today.
+
+**Total Estimated Cost:** ~$1,093-1,353/month if all 13 projects were deployed simultaneously (the 2 newest are $0 while destroyed; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
 
 ---
 
@@ -698,6 +800,8 @@ All projects follow **AWS Well-Architected Framework** principles:
 | URL Shortener | ✅ 16 tests | — | — | ✅ Live create / redirect / stats / conflict |
 | Real-time Polling App | ✅ 24 tests | — | — | ✅ WebSocket routes / GSI fan-out / atomic writes |
 | Zendesk Ticket Triage | ✅ 13 tests | — | — | ✅ Live signed webhook → Comprehend → urgent triage |
+| Server Room Inspection Dashboard | ✅ `validate`-clean (12 modules) | — | — | ⏳ Live smoke tests pending deploy |
+| Systems Manager Automated Patching | ✅ `validate`-clean | — | — | ⏳ Live patch run pending deploy |
 
 ---
 
@@ -731,13 +835,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A |
 
 ---
 
@@ -802,8 +906,8 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** June 29, 2026 — Project 11 (Serverless Zendesk Ticket Triage with Sentiment Analysis) added  
-**Status:** ✅ All projects complete, tested, documented  
+**Last Updated:** July 9, 2026 — Projects 12 (Server Room Inspection Dashboard) and 13 (Systems Manager Automated Patching) added; both authored and `terraform validate`-clean, pending deployment  
+**Status:** ✅ 11 projects deployed, tested, documented · 📝 2 authored & validated, pending deployment  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
 🚀 **Happy Deploying!**

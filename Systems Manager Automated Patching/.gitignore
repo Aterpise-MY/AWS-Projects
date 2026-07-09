@@ -1,0 +1,21 @@
+# Terraform state
+*.tfstate
+*.tfstate.*
+
+# Terraform working dir + lock
+.terraform/
+.terraform.lock.hcl
+
+# Variable files (may contain endpoints/emails) — keep the example
+*.tfvars
+!*.tfvars.example
+
+# Plan output
+*.tfplan
+*.plan
+tfplan
+tfplan.json
+
+# Crash logs
+crash.log
+crash.*.log

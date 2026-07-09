@@ -1,0 +1,4 @@
+# Non-secret configuration for the bootstrap backend.
+region            = "ap-southeast-1"
+state_bucket_name = "mcf-srid-tfstate-022499047467-apse1"
+lock_table_name   = "mcf-srid-tfstate-lock"
