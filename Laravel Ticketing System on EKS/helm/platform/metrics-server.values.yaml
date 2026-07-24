@@ -1,0 +1,48 @@
+# ==============================================================================
+# metrics-server - resource metrics for HPA and `kubectl top`
+# ==============================================================================
+# Chart: metrics-server/metrics-server
+# Namespace: kube-system
+#
+# NO IRSA: metrics-server talks only to the kubelet Summary API, never to AWS.
+# It is listed here because the ticketing web HPA (autoscaling/v2, targeting
+# 70% CPU) returns <unknown>/70% and never scales until metrics-server is
+# healthy - a classic "why won't my HPA scale" foot-gun. Install EARLY, before
+# the ticketing release.
+#
+# kube-prometheus-stack does NOT replace metrics-server: Prometheus feeds
+# dashboards/alerts, metrics-server feeds the HPA control loop. Both are needed.
+# ==============================================================================
+
+# Two replicas with anti-affinity so HPA input survives a single node loss.
+replicas: 2
+
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+# EKS worker kubelets present a serving cert the CA does not chain to, so the
+# aggregated API call fails TLS verification unless we accept it. This is the
+# standard, documented EKS setting - without it metrics-server logs
+# "x509: certificate signed by unknown authority" and never serves metrics.
+args:
+  - --kubelet-insecure-tls
+  - --kubelet-preferred-address-types=InternalIP
+
+# metrics-server exposes its own /metrics; scrape it to confirm it is serving.
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack

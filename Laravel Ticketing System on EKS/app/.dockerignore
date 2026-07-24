@@ -1,0 +1,52 @@
+# Build context is the app/ directory. Keep it minimal so the daemon does not
+# ship secrets, local state or huge trees to the builder, and so an edit to any
+# of these does not bust the layer cache.
+
+# Dependencies rebuilt inside the image
+node_modules
+vendor
+
+# Compiled assets — the `assets` stage produces public/build fresh
+public/build
+public/hot
+public/storage
+
+# Local environment and secrets — MUST never enter an ECR layer
+.env
+.env.*
+!.env.example
+auth.json
+
+# Per-pod writable state (emptyDir at runtime); never bake it in
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+storage/app/public/*
+bootstrap/cache/*
+
+# Build-time caches
+.phpunit.result.cache
+.phpunit.cache
+.php-cs-fixer.cache
+
+# VCS and tooling
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+.fleet
+.zed
+
+# Tests and dev-only config are not needed in a --no-dev runtime image
+tests
+phpunit.xml
+phpstan.neon
+.editorconfig
+README.md
+
+# The Docker build files themselves
+Dockerfile
+docker

@@ -1,0 +1,319 @@
+# ---------------------------------------------------------------------------
+# PORTFOLIO NOTE
+# This file lives inside the project folder so the whole stack reads as one
+# self-contained unit in the portfolio repository. GitHub ONLY executes
+# workflows found at the repository root under `.github/workflows/`, so this
+# copy is documentation here. In the standalone `github.com/brendonang/
+# ticketing-platform` repository this project folder IS the repository root and
+# every path below resolves as written.
+#
+# AUTHENTICATION
+# GitHub OIDC only. No IAM user, no long-lived access key, no AWS secret in
+# this repository. `aws-actions/configure-aws-credentials` trades the GitHub
+# OIDC token for STS credentials scoped to this repo and branch.
+#
+# ACTION PINNING
+# Actions are pinned to a major version tag for readability. Production posture
+# is a full commit SHA pin on every third-party action, because a major tag is
+# mutable and these jobs hold credentials that can deploy.
+#
+# IDEMPOTENCE
+# This pipeline is safe to re-run on an unchanged commit. See the `resolve` job.
+# ---------------------------------------------------------------------------
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# Never let two deploys of different SHAs race for the same release. Queue them.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_DIR: terraform/dev
+  K8S_NAMESPACE: ticketing
+  HELM_RELEASE: ticketing
+
+jobs:
+  # =========================================================================
+  # 1. Resolve the target and decide whether a build is even needed.
+  #
+  # The ECR app repository is IMMUTABLE (see modules/ecr). Pushing a tag that
+  # already exists fails with ImageTagAlreadyExistsException. Since the tag is
+  # the full commit SHA, simply re-running this workflow on an unchanged commit
+  # — which people do all the time after a transient deploy failure — would
+  # blow up in the push step and never reach the deploy job. A pipeline that
+  # cannot be safely re-run is not finished. So: ask ECR whether this exact SHA
+  # is already there, and if it is, skip straight to deploying it.
+  #
+  # Registry hostname and cluster name come from Terraform outputs (with repo
+  # variables as a fallback). Nothing here hardcodes an account ID.
+  # =========================================================================
+  resolve:
+    name: Resolve image and cluster
+    runs-on: ubuntu-24.04
+    outputs:
+      ecr_repository_url: ${{ steps.tf.outputs.ecr_repository_url }}
+      ecr_cache_repository_url: ${{ steps.tf.outputs.ecr_cache_repository_url }}
+      ecr_repository_name: ${{ steps.tf.outputs.ecr_repository_name }}
+      cluster_name: ${{ steps.tf.outputs.cluster_name }}
+      image_exists: ${{ steps.exists.outputs.image_exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.1"
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-resolve-${{ github.run_id }}
+
+      - name: Read Terraform outputs
+        id: tf
+        run: |
+          set -euo pipefail
+          if terraform -chdir="$TF_DIR" init -input=false >/dev/null 2>&1 \
+             && terraform -chdir="$TF_DIR" output -json > /tmp/tfout.json 2>/dev/null \
+             && [ "$(jq 'length' /tmp/tfout.json)" -gt 0 ]; then
+            echo "source=terraform-outputs" >> "$GITHUB_STEP_SUMMARY"
+            ECR_URL=$(jq -r '.ecr_repository_url.value' /tmp/tfout.json)
+            ECR_CACHE=$(jq -r '.ecr_cache_repository_url.value' /tmp/tfout.json)
+            CLUSTER=$(jq -r '.cluster_name.value' /tmp/tfout.json)
+          else
+            # Fallback for a runner whose role cannot read the state bucket.
+            echo "source=repository-variables" >> "$GITHUB_STEP_SUMMARY"
+            ECR_URL="${{ vars.ECR_REPOSITORY_URL }}"
+            ECR_CACHE="${{ vars.ECR_CACHE_REPOSITORY_URL }}"
+            CLUSTER="${{ vars.EKS_CLUSTER_NAME }}"
+          fi
+          test -n "$ECR_URL" && test -n "$CLUSTER" \
+            || { echo "could not resolve the ECR URL or cluster name"; exit 1; }
+          {
+            echo "ecr_repository_url=${ECR_URL}"
+            echo "ecr_cache_repository_url=${ECR_CACHE}"
+            echo "ecr_repository_name=${ECR_URL#*/}"
+            echo "cluster_name=${CLUSTER}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Does this SHA already exist in ECR?
+        id: exists
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images \
+               --repository-name "${{ steps.tf.outputs.ecr_repository_name }}" \
+               --image-ids "imageTag=${{ github.sha }}" \
+               --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "image_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image for ${{ github.sha }} already in ECR — skipping build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "image_exists=false" >> "$GITHUB_OUTPUT"
+            echo "No image for ${{ github.sha }} — building." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # =========================================================================
+  # 2. Build. arm64 only, on an arm64 runner.
+  #
+  # Every node in the cluster is Graviton (t4g), so a multi-arch build would
+  # spend most of its time producing an amd64 layer set that nothing will ever
+  # pull. Building natively on an arm64 runner also avoids QEMU emulation,
+  # which turns a ~4 minute `composer install` into a ~25 minute one.
+  #
+  # Layer cache lives in a SEPARATE, MUTABLE ECR repository. Cache manifests are
+  # overwritten on every build by design; pointing `type=registry` at the
+  # IMMUTABLE app repository silently disables caching instead of erroring.
+  # =========================================================================
+  build:
+    name: Build and push (linux/arm64)
+    needs: resolve
+    if: needs.resolve.outputs.image_exists == 'false'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-build-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/arm64
+          provenance: false
+          push: true
+          # Full 40-character commit SHA, never `latest`. `latest` makes a
+          # rollback ambiguous and makes `kubectl describe pod` useless for
+          # answering "what is actually running right now".
+          tags: ${{ needs.resolve.outputs.ecr_repository_url }}:${{ github.sha }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=registry,ref=${{ needs.resolve.outputs.ecr_cache_repository_url }}:buildcache
+          cache-to: type=registry,ref=${{ needs.resolve.outputs.ecr_cache_repository_url }}:buildcache,mode=max
+
+  # =========================================================================
+  # 3. Scan. ECR basic scanning runs automatically on push (scan_on_push).
+  # Findings are surfaced as a job summary so a reviewer sees them without
+  # digging through logs, but they do NOT fail the pipeline in dev.
+  #
+  # In production this gate WOULD be enforced: fail on any CRITICAL, and on
+  # HIGH findings that have a fix version available, with a documented,
+  # time-boxed exception process. Blocking dev on a base-image CVE that has no
+  # upstream fix yet just teaches people to bypass the pipeline.
+  # =========================================================================
+  scan:
+    name: ECR image scan
+    needs: [resolve, build]
+    if: always() && needs.resolve.result == 'success' && needs.build.result != 'failure'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-scan-${{ github.run_id }}
+
+      - name: Wait for the scan to finish and summarise findings
+        env:
+          REPO: ${{ needs.resolve.outputs.ecr_repository_name }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          echo "## Image scan — \`${REPO}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if ! aws ecr wait image-scan-complete \
+                 --repository-name "$REPO" --image-id "imageTag=${TAG}" \
+                 --region "$AWS_REGION"; then
+            echo "Scan did not complete in time — findings unavailable for this run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          aws ecr describe-image-scan-findings \
+            --repository-name "$REPO" --image-id "imageTag=${TAG}" \
+            --region "$AWS_REGION" --output json > /tmp/findings.json
+
+          jq -r '
+            .imageScanFindings.findingSeverityCounts // {} as $c
+            | "| Severity | Count |",
+              "|---|---|",
+              ( ["CRITICAL","HIGH","MEDIUM","LOW","INFORMATIONAL","UNDEFINED"][]
+                | "| \(.) | \($c[.] // 0) |" )
+          ' /tmp/findings.json >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>CRITICAL and HIGH findings</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CVE | Severity | Package |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            (.imageScanFindings.findings // [])
+            | map(select(.severity == "CRITICAL" or .severity == "HIGH"))
+            | .[]
+            | "| \(.name) | \(.severity) | \(
+                (.attributes // [] | map(select(.key == "package_name")) | .[0].value) // "n/a"
+              ) |"
+          ' /tmp/findings.json >> "$GITHUB_STEP_SUMMARY" || true
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Dev environment: findings are reported, not enforced. See the workflow comment for the production gate._" >> "$GITHUB_STEP_SUMMARY"
+
+          CRIT=$(jq -r '.imageScanFindings.findingSeverityCounts.CRITICAL // 0' /tmp/findings.json)
+          HIGH=$(jq -r '.imageScanFindings.findingSeverityCounts.HIGH // 0' /tmp/findings.json)
+          echo "::warning title=Image scan::CRITICAL=${CRIT} HIGH=${HIGH} (not enforced in dev)"
+
+  # =========================================================================
+  # 4. Deploy.
+  #
+  # No manual approval gate here — this is a dev environment and the whole
+  # point is that main deploys itself. A production version of this job would
+  # add `environment: production` with required reviewers and a wait timer
+  # configured on the GitHub Environment; that is the correct place for the
+  # gate because it also scopes the production secrets and OIDC role to the
+  # approved run rather than to the branch.
+  #
+  # Re-running this workflow on an unchanged commit is a no-op: the build was
+  # skipped above, and `helm upgrade --install` with identical values and the
+  # same image tag produces a new revision with no pod churn. It does not error.
+  # =========================================================================
+  deploy:
+    name: Helm deploy and verify
+    needs: [resolve, build, scan]
+    if: always() && needs.resolve.result == 'success' && needs.build.result != 'failure' && needs.scan.result != 'failure'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_OIDC_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-helm-${{ github.run_id }}
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Write kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ needs.resolve.outputs.cluster_name }}" \
+            --region "$AWS_REGION"
+
+      - name: helm upgrade --install
+        # --atomic rolls the release back automatically if any resource fails to
+        # become ready inside the timeout, so a bad deploy leaves the previous
+        # revision serving rather than a half-migrated cluster.
+        run: |
+          helm upgrade --install "$HELM_RELEASE" helm/ticketing \
+            --namespace "$K8S_NAMESPACE" --create-namespace \
+            --atomic --timeout 10m --wait \
+            --set image.repository=${{ needs.resolve.outputs.ecr_repository_url }} \
+            --set image.tag=${{ github.sha }} \
+            --set aws.region="$AWS_REGION"
+
+      - name: Post-deploy verification
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/verify-deployment.sh --namespace "$K8S_NAMESPACE" --release "$HELM_RELEASE"
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "## Deployment"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Cluster | \`${{ needs.resolve.outputs.cluster_name }}\` |"
+            echo "| Image | \`${{ needs.resolve.outputs.ecr_repository_url }}:${{ github.sha }}\` |"
+            echo "| Build | \`${{ needs.resolve.outputs.image_exists == 'true' && 'skipped (image already in ECR)' || 'built' }}\` |"
+            echo "| Namespace | \`${{ env.K8S_NAMESPACE }}\` |"
+            echo "| Release | \`${{ env.HELM_RELEASE }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

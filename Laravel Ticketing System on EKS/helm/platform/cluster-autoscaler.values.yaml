@@ -1,0 +1,72 @@
+# ==============================================================================
+# cluster-autoscaler - scales the app node group when pods cannot schedule
+# ==============================================================================
+# Chart: autoscaler/cluster-autoscaler
+# Namespace: kube-system  ServiceAccount: cluster-autoscaler
+# IRSA: irsa_role_arns["cluster_autoscaler"] - autoscaling describe + set
+#       desired capacity, scoped by the ASG discovery tag.
+#
+# Division of labour: KEDA scales the WORKER PODS from queue depth; when those
+# extra pods have nowhere to run, cluster-autoscaler adds a NODE to the app
+# group (min 2 / max 4 Spot t4g.medium). Both are needed - one without the other
+# either has pending pods forever or pods with nowhere to go.
+#
+# Discovery is by ASG tag (set on the app ASG by modules/eks):
+#   k8s.io/cluster-autoscaler/enabled = true
+#   k8s.io/cluster-autoscaler/ticketing-dev = owned
+# ==============================================================================
+
+# Region + cluster name from terraform outputs.
+awsRegion: ap-southeast-1
+
+autoDiscovery:
+  clusterName: ticketing-dev
+  # Only the app ASG carries the discovery tags; the system group (fixed size 1)
+  # is deliberately NOT autoscaled.
+  tags:
+    - k8s.io/cluster-autoscaler/enabled
+    - k8s.io/cluster-autoscaler/ticketing-dev
+
+rbac:
+  serviceAccount:
+    create: true
+    name: cluster-autoscaler
+    annotations:
+      eks.amazonaws.com/role-arn: "REPLACE_ME_irsa_role_arns_cluster_autoscaler"
+
+# The autoscaler itself must run on the STABLE system node - if it rode the Spot
+# app group it could be evicted mid-scale-decision.
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+extraArgs:
+  # Spot capacity is unevenly available across types; least-waste keeps bin
+  # packing tight on a small cluster.
+  expander: least-waste
+  # Scale a node back in quickly once its pods drain - this is a cost-sensitive
+  # dev cluster, not a latency-sensitive prod one.
+  scale-down-unneeded-time: 5m
+  scale-down-delay-after-add: 5m
+  # Do not evict pods that lack a controller (bare Pods) or that use local
+  # storage, to avoid surprising data loss on scale-down.
+  skip-nodes-with-local-storage: "true"
+  balance-similar-node-groups: "true"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 96Mi
+  limits:
+    cpu: 100m
+    memory: 256Mi
+
+serviceMonitor:
+  enabled: true
+  namespace: kube-system
+  selector:
+    release: kube-prometheus-stack

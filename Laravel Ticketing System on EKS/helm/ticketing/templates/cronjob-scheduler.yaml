@@ -1,0 +1,105 @@
+{{- if .Values.scheduler.enabled }}
+{{/*
+  Laravel's scheduler is a single per-minute tick. `php artisan schedule:run`
+  evaluates the schedule defined in the application and dispatches whatever is
+  due, so this CronJob must fire every minute regardless of what is scheduled -
+  the cron expression here is Kubernetes' heartbeat, not the application schedule.
+
+  Exactly ONE scheduler must exist cluster-wide. It is a CronJob rather than a
+  `schedule:work` sidecar on the web Deployment precisely because the web
+  Deployment has 2-4 replicas: a sidecar would tick 2-4 times a minute and every
+  scheduled task would run that many times.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "ticketing.fullname" . }}-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ticketing.labels" (dict "ctx" . "component" "scheduler") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  schedule: {{ .Values.scheduler.schedule | quote }}
+  timeZone: {{ .Values.app.timezone | quote }}
+
+  # Forbid. On a minute-granularity schedule, any tick that runs longer than 60s
+  # overlaps the next one. Allow would stack schedulers until they exhaust the
+  # node and dispatch every due task multiple times; Replace would kill a tick
+  # mid-dispatch. Forbid skips the overlapping run - the next tick a minute later
+  # picks up whatever is still due, which is the correct behaviour for a schedule
+  # that is re-evaluated from scratch every time.
+  concurrencyPolicy: {{ .Values.scheduler.concurrencyPolicy }}
+
+  # If the CronJob controller was unavailable (control plane upgrade, node
+  # pressure), do not fire a backlog of missed ticks all at once - skip anything
+  # more than 60s late. Without this bound the controller also gives up entirely
+  # after 100 missed schedules and the CronJob stops firing until it is recreated.
+  startingDeadlineSeconds: {{ .Values.scheduler.startingDeadlineSeconds }}
+
+  # One tick per minute produces 1440 Jobs a day. Keeping 3 of each outcome is
+  # enough to inspect the last few runs without burying etcd in completed Jobs.
+  successfulJobsHistoryLimit: {{ .Values.scheduler.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.scheduler.failedJobsHistoryLimit }}
+
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "ticketing.labels" (dict "ctx" . "component" "scheduler") | nindent 8 }}
+    spec:
+      # 0 retries: a failed tick is not retried, the next minute's tick supersedes
+      # it. Retrying would run tasks late and overlap the following tick.
+      backoffLimit: {{ .Values.scheduler.backoffLimit }}
+      # Hard ceiling so a wedged tick cannot block the next one indefinitely
+      # under concurrencyPolicy: Forbid.
+      activeDeadlineSeconds: {{ .Values.scheduler.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "ticketing.labels" (dict "ctx" . "component" "scheduler") | nindent 12 }}
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "ticketing.serviceAccountName" . }}
+          {{- with .Values.image.pullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.scheduler.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.scheduler.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: scheduler
+              image: {{ include "ticketing.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - php
+                - artisan
+                - schedule:run
+              envFrom:
+                {{- include "ticketing.envFrom" . | nindent 16 }}
+              env:
+                {{- include "ticketing.podEnv" . | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              # Requests AND limits. A per-minute Job with no request is
+              # BestEffort and is evicted first under node pressure - which on a
+              # SPOT node group means the scheduler stops ticking exactly when
+              # the cluster is busiest.
+              resources:
+                {{- toYaml .Values.scheduler.resources | nindent 16 }}
+              volumeMounts:
+                {{- include "ticketing.writableVolumeMounts" . | nindent 16 }}
+          volumes:
+            {{- include "ticketing.writableVolumes" . | nindent 12 }}
+{{- end }}

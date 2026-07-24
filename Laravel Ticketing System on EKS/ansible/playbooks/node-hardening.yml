@@ -1,0 +1,112 @@
+---
+# =============================================================================
+# node-hardening.yml
+#
+# LAYER BOUNDARY — read this before adding anything to this playbook.
+#
+#   Ansible owns the HOST.        Packages, kernel parameters, kernel modules,
+#                                 systemd units, agents, filesystem permissions,
+#                                 the container runtime's own configuration.
+#
+#   Kubernetes owns the WORKLOAD. Scheduling, Deployments, Services, secrets
+#                                 delivery, config, scaling, rollout.
+#
+#   THIS PLAYBOOK DOES NOT DEPLOY THE APPLICATION. There is no PHP here, no
+#   Composer, no nginx, no Laravel, no migration, no .env. The ticketing
+#   application ships as an OCI image in ECR tagged with a git SHA and is
+#   deployed by Helm. If a task in this file ever mentions the application, the
+#   boundary has been violated and that task belongs in the container image or
+#   in the Helm chart.
+#
+# Invoked by:
+#   1. Packer, at AMI bake time (packer/eks-node.pkr.hcl).
+#   2. An operator, against a live node over SSM, to correct configuration
+#      drift. This is why every task must be idempotent — the playbook is not a
+#      one-shot bake script.
+#
+# Idempotency is a hard requirement. Packer runs this playbook twice and the
+# second pass must report changed=0.
+# =============================================================================
+
+- name: Harden and tune an EKS worker node
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    # Set to true by the Packer provisioner. Controls the handful of decisions
+    # that legitimately differ between "baking an image" and "fixing a live
+    # node" — chiefly whether agents are left running and whether their state
+    # directories are purged.
+    packer_build: false
+
+    # Set to true on the second Packer pass. Purely informational: it makes the
+    # play name in the log say which pass is which so the changed=0 check is
+    # unambiguous.
+    idempotency_check: false
+
+  pre_tasks:
+    - name: Announce the layer boundary
+      ansible.builtin.debug:
+        msg: >-
+          Configuring the HOST layer only.
+          {{ 'Idempotency verification pass — expecting changed=0.'
+             if (idempotency_check | bool)
+             else 'Application deployment is owned by Kubernetes, not by this playbook.' }}
+      tags: [always]
+
+    - name: Fail fast if this looks like a control-plane or unrelated host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Amazon'
+        fail_msg: "This playbook targets Amazon Linux 2023 EKS nodes only."
+        quiet: true
+      tags: [always]
+
+  roles:
+    # Order matters. base-packages installs the tooling the later roles use and
+    # raises the systemd-wide limits that containerd-tuning then narrows for one
+    # unit. cis-hardening runs before containerd-tuning so that if a CIS control
+    # and a runtime requirement ever collide, the runtime requirement is applied
+    # last and wins — a node that is slightly less hardened is recoverable, a
+    # node that cannot run pods is not.
+    - role: base-packages
+      tags: [base, packages]
+
+    - role: cis-hardening
+      tags: [cis, hardening, security]
+
+    - role: containerd-tuning
+      tags: [containerd, runtime]
+
+    - role: monitoring-agents
+      tags: [monitoring, agents, observability]
+
+  post_tasks:
+    - name: Record the baseline provenance on the host
+      ansible.builtin.copy:
+        dest: /etc/ticketing-node-baseline
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Written by ansible/playbooks/node-hardening.yml.
+          # Mirrors the GitSHA / BuildTimestamp tags on the AMI so the same
+          # question can be answered from inside the node during an incident
+          # without an EC2 API call.
+          GIT_SHA={{ git_sha | default('unknown') }}
+          KUBERNETES_VERSION={{ kubernetes_version | default('unknown') }}
+          BAKED_BY={{ 'packer' if (packer_build | bool) else 'ansible-day2' }}
+      tags: [always]
+      # This file's content is stable across runs for a given git_sha, so it
+      # does not break the changed=0 requirement. It deliberately does NOT embed
+      # a timestamp for exactly that reason.
+
+    - name: Report what was configured
+      ansible.builtin.debug:
+        msg:
+          - "Host baseline applied. Roles: base-packages, cis-hardening, containerd-tuning, monitoring-agents."
+          - "Application layer untouched — deployed by Helm from an ECR image."
+          - "Kernel tuning: somaxconn, ip_local_port_range, nf_conntrack_max, inotify limits."
+          - "Reboot is NOT required; sysctl and modules were applied in-band."
+      tags: [always]

@@ -1,0 +1,82 @@
+# ==============================================================================
+# prometheus-redis-exporter (oliver006/redis_exporter) - queue depth metrics
+# ==============================================================================
+# Chart: prometheus-community/prometheus-redis-exporter
+# Purpose: turn ElastiCache Redis key sizes into the redis_key_size metric that
+#          the queue-depth dashboard and two of the four alerts depend on.
+#
+# WHY this exporter and not KEDA's internal state: KEDA polls Redis to decide
+# scaling but exposes nothing durable. We need the backlog as a first-class
+# time series for alerting and history, independent of KEDA.
+# ==============================================================================
+
+# --------------------------------------------------------------------------
+# Target Redis. ElastiCache here has transit_encryption_enabled = true, so the
+# address MUST be rediss:// (TLS). Plain redis:// yields a connection reset that
+# looks like a security-group problem and is not.
+# --------------------------------------------------------------------------
+# Set the host from `terraform -chdir=terraform/dev output redis_address`.
+redisAddress: "rediss://REPLACE_ME_redis_primary_endpoint:6379"
+
+# --------------------------------------------------------------------------
+# AUTH token. NEVER a literal here. The token lives in AWS Secrets Manager as
+# ticketing-dev/redis-auth and must be projected into a Kubernetes secret in
+# THIS namespace (monitoring) by an ExternalSecret before the exporter starts.
+# See README.md "Redis exporter secret" for the ExternalSecret snippet.
+# --------------------------------------------------------------------------
+auth:
+  enabled: true
+  secret:
+    name: ticketing-redis-exporter-auth
+    key: auth_token
+
+# --------------------------------------------------------------------------
+# check-keys: the exporter runs LLEN/type-aware size checks on these keys every
+# scrape and publishes redis_key_size{key=...}. The `2=` prefix selects Redis
+# logical DB 2 (the queue DB per the contract). Keys:
+#   laravel_database_queues:default          -> pending backlog (alert 1)
+#   laravel_database_queues:default:failed   -> failed set        (alert 4)
+#   :delayed / :reserved                     -> in-flight visibility
+# If REDIS_PREFIX or the queue name changes, update these to match the chart's
+# .Values.redis.prefix + "queues:" + queue.
+# --------------------------------------------------------------------------
+env:
+  - name: REDIS_EXPORTER_CHECK_KEYS
+    value: "2=laravel_database_queues:default,2=laravel_database_queues:default:failed,2=laravel_database_queues:default:delayed,2=laravel_database_queues:default:reserved"
+  # ElastiCache presents an AWS-managed cert; the CN will not match the DNS name
+  # we dial, so verification is skipped. Acceptable inside a private VPC subnet;
+  # revisit if the exporter ever runs outside the VPC.
+  - name: REDIS_EXPORTER_SKIP_TLS_VERIFICATION
+    value: "true"
+
+# --------------------------------------------------------------------------
+# Scheduling + resources. Runs on the system node group like the rest of the
+# platform add-ons.
+# --------------------------------------------------------------------------
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+# --------------------------------------------------------------------------
+# ServiceMonitor so the Prometheus Operator scrapes this exporter. The stack's
+# serviceMonitorSelectorNilUsesHelmValues=false lets it be discovered without a
+# release label.
+# --------------------------------------------------------------------------
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 30s
+  labels:
+    release: kube-prometheus-stack

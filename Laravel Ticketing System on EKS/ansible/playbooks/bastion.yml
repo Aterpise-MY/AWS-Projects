@@ -1,0 +1,336 @@
+---
+# =============================================================================
+# bastion.yml
+#
+# LAYER BOUNDARY — read this before adding anything to this playbook.
+#
+#   Ansible owns the HOST.        The operator toolchain on this instance:
+#                                 kubectl, helm, awscli, the mysql client, and
+#                                 the SSM agent that makes the box reachable.
+#
+#   Kubernetes owns the WORKLOAD. Nothing on this host runs the ticketing
+#                                 application. This is an operator jump box for
+#                                 reaching RDS and ElastiCache, which live in
+#                                 private subnets with no public route.
+#
+#   THIS PLAYBOOK DOES NOT DEPLOY THE APPLICATION. It installs the tools an
+#   operator uses to look at a cluster that Helm deployed.
+#
+# -----------------------------------------------------------------------------
+# NO SSH KEYS. NO PORT 22 INGRESS.
+# -----------------------------------------------------------------------------
+#
+# This host is reached exclusively through AWS Systems Manager Session Manager.
+# There is deliberately:
+#
+#   - no key pair on the instance
+#   - no authorized_keys file provisioned by this playbook
+#   - no port 22 rule in the instance's security group (Terraform)
+#   - no public IP; the instance sits in a private subnet
+#
+# The reasons this matters more than it looks:
+#
+#   1. There is no key to lose, rotate, or find in someone's ~/.ssh three years
+#      after they left. Access is an IAM decision, revoked by removing a policy.
+#   2. Every session is authenticated by IAM, authorised by an IAM policy, and
+#      recorded in CloudTrail with the principal who opened it. An SSH session
+#      from a shared key is attributable to a key, not to a person.
+#   3. There is no listening port to scan for, brute-force, or exploit a
+#      pre-auth CVE against. The attack surface is an outbound-only agent.
+#
+# Connect with:
+#   aws ssm start-session --target <instance-id> --region ap-southeast-1
+#
+# Tunnel to RDS through it with:
+#   aws ssm start-session --target <instance-id> \
+#     --document-name AWS-StartPortForwardingSessionToRemoteHost \
+#     --parameters '{"host":["<rds-endpoint>"],"portNumber":["3306"],"localPortNumber":["13306"]}'
+#
+# If you find yourself adding an SSH key to this playbook, the thing you
+# actually want is an SSM document or a port-forwarding session.
+# =============================================================================
+
+- name: Provision the operator bastion
+  hosts: "{{ target_hosts | default('component_bastion') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    bastion_kubectl_version: "1.36.0"
+    bastion_helm_version: "3.16.4"
+    bastion_arch: "arm64"
+    bastion_bin_dir: /usr/local/bin
+    bastion_cluster_name: "ticketing-dev"
+    bastion_region: "ap-southeast-1"
+
+    bastion_packages:
+      - amazon-ssm-agent
+      - mariadb105          # provides the mysql client for RDS MySQL 8.0
+      - jq
+      - git
+      - tar
+      - gzip
+      - unzip
+      - bind-utils
+      - nc
+      - less
+      - vim-minimal
+
+  pre_tasks:
+    - name: Announce the layer boundary
+      ansible.builtin.debug:
+        msg: >-
+          Configuring the operator toolchain on the HOST layer.
+          Access is SSM Session Manager only — no SSH keys, no port 22 ingress.
+      tags: [always]
+
+  tasks:
+    # -----------------------------------------------------------------------
+    # Base tooling
+    # -----------------------------------------------------------------------
+
+    - name: Install operator packages
+      ansible.builtin.dnf:
+        name: "{{ bastion_packages }}"
+        state: present
+        update_cache: true
+      register: bastion_pkg
+      retries: 3
+      delay: 10
+      until: bastion_pkg is succeeded
+      tags: [packages]
+
+    - name: Ensure the SSM agent is enabled and running
+      ansible.builtin.systemd_service:
+        name: amazon-ssm-agent
+        enabled: true
+        state: started
+      tags: [ssm]
+
+    # Explicitly assert the invariant rather than trusting a comment. If someone
+    # has hand-placed a key on this host, the run fails and says so.
+    - name: Assert no SSH authorized_keys have been provisioned
+      ansible.builtin.find:
+        paths:
+          - /root/.ssh
+          - /home
+        patterns: "authorized_keys"
+        recurse: true
+        file_type: file
+      register: bastion_authorized_keys
+      changed_when: false
+      tags: [ssh, security]
+
+    - name: Fail if an SSH key was found on a host that should have none
+      ansible.builtin.assert:
+        that:
+          - bastion_authorized_keys.matched == 0
+        fail_msg: >-
+          Found {{ bastion_authorized_keys.matched }} authorized_keys file(s) on
+          a host whose only supported access path is SSM Session Manager:
+          {{ bastion_authorized_keys.files | map(attribute='path') | list }}.
+          Remove them, or explain in this playbook why they exist.
+        quiet: true
+      tags: [ssh, security]
+
+    - name: Disable and mask sshd
+      ansible.builtin.systemd_service:
+        name: sshd
+        enabled: false
+        state: stopped
+        masked: true
+      failed_when: false
+      tags: [ssh, security]
+      # > The security group has no port 22 rule, so this is defence in depth.
+      # > failed_when is relaxed because the unit may already be absent on a
+      # > minimal image, which is the desired end state anyway.
+
+    # -----------------------------------------------------------------------
+    # kubectl
+    # -----------------------------------------------------------------------
+
+    - name: Check the installed kubectl version
+      ansible.builtin.command: "{{ bastion_bin_dir }}/kubectl version --client=true -o json"
+      register: bastion_kubectl_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [kubectl]
+
+    - name: Install kubectl
+      ansible.builtin.get_url:
+        url: >-
+          https://dl.k8s.io/release/v{{ bastion_kubectl_version }}/bin/linux/{{ bastion_arch }}/kubectl
+        dest: "{{ bastion_bin_dir }}/kubectl"
+        owner: root
+        group: root
+        mode: "0755"
+      when: >-
+        bastion_kubectl_installed.rc != 0
+        or bastion_kubectl_version not in (bastion_kubectl_installed.stdout | default(''))
+      tags: [kubectl]
+
+    - name: Install kubectl bash completion
+      ansible.builtin.shell:
+        cmd: "{{ bastion_bin_dir }}/kubectl completion bash > /etc/bash_completion.d/kubectl"
+        creates: /etc/bash_completion.d/kubectl
+      tags: [kubectl]
+
+    # -----------------------------------------------------------------------
+    # helm
+    # -----------------------------------------------------------------------
+
+    - name: Check the installed helm version
+      ansible.builtin.command: "{{ bastion_bin_dir }}/helm version --short"
+      register: bastion_helm_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [helm]
+
+    - name: Create a temporary directory for the helm download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: helm
+      register: bastion_helm_tmp
+      when: bastion_helm_version not in (bastion_helm_installed.stdout | default(''))
+      tags: [helm]
+
+    - name: Download helm
+      ansible.builtin.unarchive:
+        src: >-
+          https://get.helm.sh/helm-v{{ bastion_helm_version }}-linux-{{ bastion_arch }}.tar.gz
+        dest: "{{ bastion_helm_tmp.path }}"
+        remote_src: true
+      when: bastion_helm_version not in (bastion_helm_installed.stdout | default(''))
+      tags: [helm]
+
+    - name: Install helm
+      ansible.builtin.copy:
+        src: "{{ bastion_helm_tmp.path }}/linux-{{ bastion_arch }}/helm"
+        dest: "{{ bastion_bin_dir }}/helm"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      when: bastion_helm_version not in (bastion_helm_installed.stdout | default(''))
+      tags: [helm]
+
+    - name: Remove the helm download directory
+      ansible.builtin.file:
+        path: "{{ bastion_helm_tmp.path }}"
+        state: absent
+      when:
+        - bastion_helm_tmp.path is defined
+        - bastion_helm_version not in (bastion_helm_installed.stdout | default(''))
+      tags: [helm]
+
+    # -----------------------------------------------------------------------
+    # AWS CLI v2 and the Session Manager plugin
+    # -----------------------------------------------------------------------
+
+    - name: Check whether the AWS CLI v2 is installed
+      ansible.builtin.command: /usr/local/bin/aws --version
+      register: bastion_awscli_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [awscli]
+
+    - name: Create a temporary directory for the AWS CLI download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: awscli
+      register: bastion_awscli_tmp
+      when: "'aws-cli/2' not in (bastion_awscli_installed.stdout | default(''))"
+      tags: [awscli]
+
+    - name: Download the AWS CLI v2 installer
+      ansible.builtin.unarchive:
+        src: "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+        dest: "{{ bastion_awscli_tmp.path }}"
+        remote_src: true
+      when: "'aws-cli/2' not in (bastion_awscli_installed.stdout | default(''))"
+      tags: [awscli]
+
+    - name: Install the AWS CLI v2
+      ansible.builtin.command:
+        cmd: "{{ bastion_awscli_tmp.path }}/aws/install --update"
+        creates: /usr/local/bin/aws
+      when: "'aws-cli/2' not in (bastion_awscli_installed.stdout | default(''))"
+      tags: [awscli]
+
+    - name: Remove the AWS CLI download directory
+      ansible.builtin.file:
+        path: "{{ bastion_awscli_tmp.path }}"
+        state: absent
+      when:
+        - bastion_awscli_tmp.path is defined
+        - "'aws-cli/2' not in (bastion_awscli_installed.stdout | default(''))"
+      tags: [awscli]
+
+    - name: Install the Session Manager plugin
+      ansible.builtin.dnf:
+        name: "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_arm64/session-manager-plugin.rpm"
+        state: present
+        disable_gpg_check: true
+      tags: [ssm]
+      # Lets an operator open a nested port-forwarding session from the bastion
+      # to RDS without leaving the box.
+
+    # -----------------------------------------------------------------------
+    # Operator convenience
+    # -----------------------------------------------------------------------
+
+    - name: Write the operator shell profile
+      ansible.builtin.copy:
+        dest: /etc/profile.d/99-ticketing-bastion.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/bastion.yml). Manual edits are overwritten.
+          #
+          # This host is an operator jump box. It runs no application workload.
+          # Access is SSM Session Manager only; there is no SSH key and no port
+          # 22 ingress.
+          export AWS_DEFAULT_REGION={{ bastion_region }}
+          export AWS_REGION={{ bastion_region }}
+          export TICKETING_CLUSTER={{ bastion_cluster_name }}
+          export KUBE_EDITOR=vi
+          alias k=kubectl
+          alias kgp='kubectl get pods -n ticketing'
+          alias klogs='kubectl logs -n ticketing -l app.kubernetes.io/name=ticketing --tail=100 -f'
+          echo "Bastion: run 'refresh-kubeconfig' to (re)fetch cluster credentials."
+      tags: [profile]
+
+    # Not run at provision time: kubeconfig is per-operator and depends on the
+    # IAM identity of the session, so it must be fetched inside the session.
+    - name: Install the kubeconfig refresh helper
+      ansible.builtin.copy:
+        dest: "{{ bastion_bin_dir }}/refresh-kubeconfig"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          # Managed by Ansible (playbooks/bastion.yml).
+          #
+          # kubeconfig is written per-session because the EKS access entry that
+          # authorises it is bound to the IAM principal of the SSM session, not
+          # to this host. Baking a kubeconfig would bake somebody's identity.
+          set -euo pipefail
+          aws eks update-kubeconfig \
+            --name "${TICKETING_CLUSTER:-{{ bastion_cluster_name }}}" \
+            --region "${AWS_REGION:-{{ bastion_region }}}"
+          kubectl config current-context
+      tags: [profile]
+
+  post_tasks:
+    - name: Report the installed toolchain
+      ansible.builtin.debug:
+        msg:
+          - "Bastion ready. Tools: kubectl {{ bastion_kubectl_version }}, helm {{ bastion_helm_version }}, awscli v2, mysql client."
+          - "Access path: aws ssm start-session --target <instance-id> --region {{ bastion_region }}"
+          - "No SSH key is present and sshd is masked. Port 22 ingress does not exist in the security group."
+      tags: [always]

@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: containerd-tuning). Manual edits are overwritten.
+#
+# These modules are REQUIRED. They are the explicit inverse of the CIS module
+# blacklist in roles/cis-hardening — a stock CIS profile that blacklists overlay
+# produces a node on which no pod can start, and one that blacklists
+# br_netfilter produces a node on which Service ClusterIPs silently black-hole.
+
+{% for module in containerd_required_modules %}
+{{ module }}
+{% endfor %}

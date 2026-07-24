@@ -1,0 +1,31 @@
+apiVersion: v2
+name: ticketing
+description: Laravel ticketing platform on Amazon EKS - web, queue worker, scheduler and migration workloads with External Secrets, KEDA and an ALB ingress.
+type: application
+
+# Chart version is the packaging version. The application version is NOT tracked here:
+# the deployed artefact is pinned by image.tag (a full 40-char git SHA) at install time.
+version: 0.1.0
+appVersion: "0.1.0"
+
+# EKS 1.36 per the build contract. The floor is 1.26 because the chart uses
+# autoscaling/v2 HPAs, policy/v1 PodDisruptionBudget and networking.k8s.io/v1 Ingress.
+kubeVersion: ">=1.26.0-0"
+
+keywords:
+  - laravel
+  - php
+  - eks
+  - ticketing
+
+maintainers:
+  - name: Platform Engineering
+    email: platform@example.com
+
+annotations:
+  # Cluster-scoped prerequisites that this chart does NOT install. They belong to a
+  # platform chart owned by the cluster team; installing them here would couple the
+  # application release lifecycle to the lifecycle of shared controllers.
+  ticketing.io/requires: >-
+    aws-load-balancer-controller, external-secrets-operator, keda, metrics-server,
+    vpc-cni with ENABLE_NETWORK_POLICY=true

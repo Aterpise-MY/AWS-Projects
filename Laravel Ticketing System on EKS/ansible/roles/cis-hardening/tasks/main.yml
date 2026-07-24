@@ -1,0 +1,366 @@
+---
+# roles/cis-hardening/tasks/main.yml
+#
+# =============================================================================
+# CIS Amazon Linux 2023 Benchmark — APPLIED SUBSET
+# =============================================================================
+#
+# This role applies the CIS controls that an EKS worker node can survive. A
+# stock CIS profile applied wholesale to a Kubernetes node produces a machine
+# that boots, passes the scan, and cannot run a pod. The controls below are
+# skipped on purpose, and each one is skipped because it breaks something
+# specific — not because it was inconvenient.
+#
+# -----------------------------------------------------------------------------
+# DELIBERATELY SKIPPED CONTROLS
+# -----------------------------------------------------------------------------
+#
+# CIS 3.1.1 / 3.3.1  "Ensure IP forwarding is disabled"
+#     net.ipv4.ip_forward=0 and net.ipv6.conf.all.forwarding=0.
+#     BREAKS: everything. The VPC CNI routes pod traffic through the node's
+#     network namespace and kube-proxy rewrites destinations in iptables; both
+#     require forwarding. With this control applied, pods can reach nothing off
+#     their own node and Service ClusterIPs black-hole. The kubelet explicitly
+#     sets ip_forward=1 at startup, so applying it also produces permanent
+#     scanner drift.
+#
+# CIS 1.1.1.x (partial)  "Ensure mounting of squashfs/overlayfs is disabled"
+#     BREAKS: containerd. overlay is the snapshotter backing every container
+#     image layer. Blacklisting it means no pod ever starts. See
+#     cis_blacklist_filesystems in defaults/main.yml for what IS blacklisted.
+#
+# CIS 3.5.1.x / 3.5.2.x / 3.5.3.x  "Ensure a host firewall (firewalld or
+#     nftables) is configured with a default deny policy"
+#     BREAKS: kube-proxy and the CNI. Both own the node's iptables/nftables
+#     ruleset and rewrite it continuously. A second firewall manager with a
+#     default-deny policy either flushes their rules or is flushed by them, and
+#     which one wins is a race. Network policy on this platform is enforced by
+#     the VPC CNI network-policy agent (ENABLE_NETWORK_POLICY=true on the addon)
+#     and by security groups, which is the correct layer for it.
+#
+# CIS 1.1.2.x  "Ensure separate partitions exist for /var, /var/tmp, /var/log,
+#     /var/log/audit and /home"
+#     SKIPPED: the EKS-optimized AMI ships a single 30 GiB root volume, and the
+#     kubelet's disk-pressure eviction logic reads a single filesystem's usage.
+#     Splitting the volume gives the kubelet a view that does not match reality
+#     and turns image-cache growth into an eviction storm on a partition the
+#     kubelet is not watching. Disk pressure is handled by image GC thresholds
+#     and the journald cap instead.
+#
+# CIS 1.1.2.x (mount options)  "Ensure noexec/nosuid/nodev is set on /var/tmp
+#     and /tmp"
+#     PARTIALLY SKIPPED: noexec on /tmp breaks several CSI node plugins and the
+#     SSM agent's Run Command staging directory, both of which write and execute
+#     helper binaries under /tmp. nodev and nosuid are safe and are applied.
+#
+# CIS 3.3.x  "Ensure IPv6 is disabled"
+#     SKIPPED: disabling IPv6 at the kernel level removes ::1, which several
+#     Go runtimes (including components in the AWS SDK path) bind to for
+#     loopback health checks. The cluster is IPv4-only by configuration, not by
+#     amputating the stack.
+#
+# CIS 4.1.1.4  "Ensure the audit configuration is immutable (-e 2)"
+#     SKIPPED: an immutable ruleset cannot be changed without a reboot. On a
+#     node that is replaced rather than rebooted this converts any audit rule
+#     mistake into "rebake the AMI", and it blocks incident responders from
+#     adding a targeted rule during a live investigation. Audit rules are
+#     protected by file permissions and by the fact that only SSM-authenticated
+#     principals can reach the host. -e 1 (enabled, mutable) is set instead.
+#
+# CIS 4.1.3.x (subset)  "Ensure successful/unsuccessful file access attempts
+#     are collected"
+#     PARTIALLY SKIPPED: the full syscall audit set on a container host
+#     generates enormous volume — every container filesystem operation is a
+#     syscall on the host. The applied ruleset targets host-level identity,
+#     privilege and configuration changes, not per-syscall file access.
+#
+# CIS 6.1.x  "Ensure no world-writable files exist" (remediation)
+#     SKIPPED as an automated remediation: the standard fix walks the entire
+#     filesystem and chmods whatever it finds, which on a container host means
+#     walking every image layer under /var/lib/containerd. It is slow, it is not
+#     idempotent, and it can corrupt image layers. Detection is fine; automated
+#     remediation is not.
+#
+# CIS 5.4.1.x  "Ensure password expiration applies to all users"
+#     APPLIED TO INTERACTIVE ACCOUNTS ONLY. Applying aging to system service
+#     accounts locks them out and takes the node with them.
+#
+# CIS 2.2.x  "Ensure <service> is not installed" (X, print, mail, NFS, DNS…)
+#     NOT APPLICABLE: the EKS-optimized AMI is minimal and ships none of them.
+#     A task that removes a package that was never installed is noise.
+#
+# =============================================================================
+
+- name: Blacklist unused filesystem drivers
+  ansible.builtin.template:
+    src: blacklist-filesystems.conf.j2
+    dest: /etc/modprobe.d/99-cis-filesystems.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Blacklist unused network protocols
+  ansible.builtin.template:
+    src: blacklist-protocols.conf.j2
+    dest: /etc/modprobe.d/99-cis-protocols.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Kernel parameters
+# ---------------------------------------------------------------------------
+
+- name: Apply CIS security kernel parameters
+  ansible.builtin.template:
+    src: sysctl-cis-security.conf.j2
+    dest: /etc/sysctl.d/95-cis-security.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl
+
+# Ordered 90- so that if any value collides with the CIS file at 95-, the
+# security value wins. Nothing currently collides, but the ordering makes the
+# precedence explicit rather than accidental.
+- name: Apply EKS workload tuning kernel parameters
+  ansible.builtin.template:
+    src: sysctl-eks-tuning.conf.j2
+    dest: /etc/sysctl.d/90-eks-tuning.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl
+
+# net.netfilter.* keys do not exist until nf_conntrack is loaded, so a sysctl
+# reload before the module is present silently drops them.
+- name: Ensure conntrack is loaded at boot before sysctl runs
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/99-cis-conntrack.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (role: cis-hardening).
+      # net.netfilter.nf_conntrack_* sysctls do not exist until this module is
+      # loaded. Without this file the tuning values are silently ignored at boot.
+      nf_conntrack
+
+- name: Gather currently loaded kernel modules
+  ansible.builtin.command: lsmod
+  register: cis_lsmod
+  changed_when: false
+  check_mode: false
+
+- name: Load nf_conntrack now so the tuning sysctls apply this run
+  ansible.builtin.command: modprobe nf_conntrack
+  when: "'nf_conntrack' not in cis_lsmod.stdout"
+  changed_when: true
+  notify: Reload sysctl
+
+# ---------------------------------------------------------------------------
+# Filesystem permissions (CIS 6.1.x)
+# ---------------------------------------------------------------------------
+
+- name: Enforce permissions on account and group files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+    state: file
+  loop:
+    - { path: /etc/passwd, mode: "0644" }
+    - { path: /etc/passwd-, mode: "0644" }
+    - { path: /etc/group, mode: "0644" }
+    - { path: /etc/group-, mode: "0644" }
+    - { path: /etc/shadow, mode: "0000" }
+    - { path: /etc/shadow-, mode: "0000" }
+    - { path: /etc/gshadow, mode: "0000" }
+    - { path: /etc/gshadow-, mode: "0000" }
+  failed_when: false
+  # The backup files (-) may not exist on a freshly built AMI. Their absence is
+  # not a finding; a wrong mode on one that does exist is.
+
+- name: Restrict cron and at to root
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/cron.deny
+    - /etc/at.deny
+
+- name: Create root-only cron and at allow files
+  ansible.builtin.copy:
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "root\n"
+  loop:
+    - /etc/cron.allow
+    - /etc/at.allow
+
+- name: Enforce permissions on cron directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+    state: directory
+  loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+
+# ---------------------------------------------------------------------------
+# Account policy (CIS 5.4.x)
+# ---------------------------------------------------------------------------
+
+- name: Apply password policy in /etc/login.defs
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: "^#?\\s*{{ item.key }}\\s"
+    line: "{{ item.key }}\t{{ item.value }}"
+    state: present
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ cis_login_defs | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# CIS 5.4.2. `useradd -D -f` is the supported way to write this value, but the
+# command is not self-idempotent, so the current value is read first and the
+# command only runs on an actual mismatch.
+- name: Read the current useradd defaults
+  ansible.builtin.slurp:
+    src: /etc/default/useradd
+  register: cis_useradd_defaults_file
+
+- name: Set the default inactive-account lock period
+  ansible.builtin.command: "useradd -D -f {{ cis_inactive_days }}"
+  when: >-
+    ('INACTIVE=' ~ cis_inactive_days)
+    not in (cis_useradd_defaults_file.content | b64decode)
+  changed_when: true
+
+- name: Set a restrictive default umask for login shells
+  ansible.builtin.copy:
+    dest: /etc/profile.d/99-cis-umask.sh
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (role: cis-hardening). CIS 5.5.5.
+      umask {{ cis_login_defs.UMASK }}
+
+- name: Install the legal warning banner
+  ansible.builtin.copy:
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ cis_banner_text }}"
+  loop:
+    - /etc/issue
+    - /etc/issue.net
+    - /etc/motd
+
+# ---------------------------------------------------------------------------
+# SSH (CIS 5.2.x)
+# ---------------------------------------------------------------------------
+
+- name: Create the sshd config drop-in directory
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Harden sshd
+  ansible.builtin.template:
+    src: sshd-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-cis-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "/usr/sbin/sshd -t -f %s"
+  notify: Restart sshd
+
+- name: Enforce permissions on SSH host private keys
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+    state: file
+  loop:
+    - /etc/ssh/ssh_host_rsa_key
+    - /etc/ssh/ssh_host_ecdsa_key
+    - /etc/ssh/ssh_host_ed25519_key
+  failed_when: false
+
+# Optional and off by default. Packer is connected over SSH right now, so this
+# only takes effect on the next boot of an instance launched from the AMI.
+- name: Mask sshd so instances launched from this AMI boot without it
+  ansible.builtin.systemd_service:
+    name: sshd
+    enabled: false
+    masked: true
+  when: cis_disable_sshd_at_boot | bool
+
+# ---------------------------------------------------------------------------
+# auditd (CIS section 4)
+# ---------------------------------------------------------------------------
+
+- name: Install auditd
+  ansible.builtin.dnf:
+    name: audit
+    state: present
+  when: cis_enable_auditd | bool
+
+- name: Configure auditd log rotation
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: "^{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+    state: present
+  loop:
+    - { key: "max_log_file", value: "{{ cis_auditd_max_log_file_mb }}" }
+    - { key: "num_logs", value: "{{ cis_auditd_num_logs }}" }
+    - { key: "max_log_file_action", value: "ROTATE" }
+    - { key: "space_left_action", value: "SYSLOG" }
+    - { key: "admin_space_left_action", value: "SYSLOG" }
+    - { key: "disk_full_action", value: "SYSLOG" }
+  loop_control:
+    label: "{{ item.key }}"
+  when: cis_enable_auditd | bool
+  notify: Restart auditd
+  # > disk_full_action is SYSLOG, not HALT. CIS suggests halting the node when
+  # > the audit partition fills. Halting a Kubernetes worker because a log
+  # > partition filled converts a logging problem into an availability incident;
+  # > the correct response on a node that is cattle is to shout, not to die.
+
+- name: Install the host-level audit ruleset
+  ansible.builtin.template:
+    src: audit-rules.j2
+    dest: /etc/audit/rules.d/99-ticketing.rules
+    owner: root
+    group: root
+    mode: "0600"
+  when: cis_enable_auditd | bool
+  notify: Restart auditd
+
+- name: Enable auditd
+  ansible.builtin.systemd_service:
+    name: auditd
+    enabled: true
+  when: cis_enable_auditd | bool
+  # state: is deliberately not set. auditd refuses `systemctl restart` on
+  # AL2023 (it must be stopped via `service auditd restart`), and toggling it
+  # mid-play on a live node blackholes audit events. The handler uses the
+  # supported path.

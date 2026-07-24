@@ -1,0 +1,3 @@
+# Holds the committed MySQL schema baseline written by playbooks/db-maintenance.yml
+# (schema-baseline.sql) on its first --tags schema run. Commit that file so the
+# next run diffs against it.

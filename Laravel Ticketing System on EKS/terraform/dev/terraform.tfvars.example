@@ -1,0 +1,33 @@
+# Copy to terraform.tfvars and fill in real values. Do NOT commit terraform.tfvars.
+# This example file contains PLACEHOLDERS ONLY: no real emails, ARNs, or secrets.
+
+# Email written to the `Owner` default tag on every resource.
+owner_email = "you@example.com"
+
+# IAM principals granted cluster-admin via EKS access entries. Use your own
+# role/user ARNs. Empty list is valid but leaves you with no kubectl access.
+admin_principal_arns = [
+  # "arn:aws:iam::022499047467:role/YourAdminRole",
+  # "arn:aws:iam::022499047467:user/your.name",
+]
+
+# Optional. Narrow the public Kubernetes API endpoint to known egress ranges.
+# public_access_cidrs = ["203.0.113.0/24"]
+
+# The following already default to the contract values; override only if needed.
+# region             = "ap-southeast-1"
+# name_prefix        = "ticketing-dev"
+# cluster_name       = "ticketing-dev"
+# kubernetes_version = "1.36"
+# vpc_cidr           = "10.42.0.0/16"
+# azs                = ["ap-southeast-1a", "ap-southeast-1b"]
+# enable_flow_logs   = false
+
+# Interface VPC endpoints (ECR API/DKR, STS, CloudWatch Logs) default ON for a
+# production-shaped posture. Set false to save ~$76/mo in dev; that egress then
+# routes through the single NAT Gateway. The free S3 gateway endpoint always stays.
+# enable_interface_endpoints = false
+
+# Optional custom worker AMI (Packer output). Leave unset to use the
+# EKS-optimised AL2023 arm64 AMI.
+# node_ami_id = "ami-xxxxxxxxxxxxxxxxx"

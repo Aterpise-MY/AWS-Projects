@@ -1,0 +1,12 @@
+# Build artifact. The AMI ID is passed forward by CI as a job output and lives
+# in Terraform state, not in git.
+manifest.json
+
+# Packer plugin binaries and crash logs
+.packer.d/
+packer_cache/
+crash.log
+
+# Python bytecode from local py_compile checks
+__pycache__/
+*.pyc

@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ticketing.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ticketing.labels" (dict "ctx" . "component" "config") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  # --- Application ------------------------------------------------------------
+  APP_NAME: "Ticketing"
+  APP_ENV: {{ .Values.app.env | quote }}
+  APP_DEBUG: {{ .Values.app.debug | quote }}
+  APP_URL: {{ .Values.app.url | quote }}
+  APP_TIMEZONE: {{ .Values.app.timezone | quote }}
+  APP_LOCALE: {{ .Values.app.locale | quote }}
+
+  # --- Logging ----------------------------------------------------------------
+  # stderr, not a file. The container root filesystem is read-only and there is
+  # no sidecar tailing storage/logs; Fluent Bit reads the container stdout/stderr
+  # stream off the node. A file channel here loses every log line.
+  LOG_CHANNEL: {{ .Values.app.logChannel | quote }}
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  LOG_STDERR_FORMATTER: "Monolog\\Formatter\\JsonFormatter"
+
+  # --- Session ----------------------------------------------------------------
+  # SESSION_DRIVER=redis is not a performance choice, it is a correctness one.
+  # The `file` driver writes each session to storage/framework/sessions on the
+  # pod's own emptyDir. With 2-4 replicas behind an ALB, a user whose next request
+  # lands on a different pod finds no session file and is silently logged out -
+  # no error, no log line, just an unexplained bounce back to the login page that
+  # gets worse every time the HPA scales up. Redis makes the session store shared.
+  SESSION_DRIVER: {{ .Values.app.sessionDriver | quote }}
+  # Redis logical DB 1 - sessions (build contract).
+  SESSION_CONNECTION: "default"
+  SESSION_LIFETIME: "120"
+  SESSION_ENCRYPT: "false"
+  SESSION_SECURE_COOKIE: "true"
+  SESSION_SAME_SITE: "lax"
+
+  # --- Cache ------------------------------------------------------------------
+  CACHE_STORE: {{ .Values.app.cacheStore | quote }}
+  CACHE_PREFIX: "ticketing_cache"
+
+  # --- Queue ------------------------------------------------------------------
+  QUEUE_CONNECTION: {{ .Values.app.queueConnection | quote }}
+  # Named connection so the queue lands on Redis DB 2 rather than sharing DB 1
+  # with sessions. config/database.php must define a `queue` redis connection
+  # reading REDIS_QUEUE_DB.
+  REDIS_QUEUE_CONNECTION: "queue"
+  REDIS_QUEUE: {{ .Values.redis.queue | quote }}
+
+  # --- Filesystem -------------------------------------------------------------
+  # Attachments go to S3. The `local` disk would write to the pod's emptyDir and
+  # every uploaded file would vanish on the next rollout - and would only be
+  # visible to the one replica that happened to receive the upload.
+  FILESYSTEM_DISK: {{ .Values.app.filesystemDisk | quote }}
+  AWS_DEFAULT_REGION: {{ .Values.aws.region | quote }}
+  AWS_BUCKET: {{ .Values.storage.attachmentsBucket | quote }}
+  AWS_USE_PATH_STYLE_ENDPOINT: "false"
+
+  # --- Database ---------------------------------------------------------------
+  # Host, port, name, user and password all arrive from the
+  # ticketing-dev/database secret. Only the driver is static.
+  DB_CONNECTION: {{ .Values.database.connection | quote }}
+
+  # --- Redis ------------------------------------------------------------------
+  REDIS_CLIENT: {{ .Values.redis.client | quote }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  # ElastiCache is created with transit_encryption_enabled = true. `tcp` here
+  # produces a bare connection reset that looks exactly like a security group
+  # problem and is not.
+  REDIS_SCHEME: {{ ternary "tls" "tcp" .Values.redis.tls | quote }}
+  # Key namespace. Changing this changes the KEDA queue key - see
+  # templates/scaledobject-worker.yaml before touching it.
+  REDIS_PREFIX: {{ .Values.redis.prefix | quote }}
+  # Logical DB indices - build contract: 0 cache, 1 sessions, 2 queue.
+  REDIS_DB: {{ .Values.redis.db.sessions | quote }}
+  REDIS_CACHE_DB: {{ .Values.redis.db.cache | quote }}
+  REDIS_QUEUE_DB: {{ .Values.redis.db.queue | quote }}
+
+  # --- Proxy ------------------------------------------------------------------
+  # The ALB terminates TLS and forwards X-Forwarded-Proto/For. Without trusting
+  # it Laravel generates http:// URLs behind an https:// ALB and the browser
+  # blocks the assets as mixed content.
+  # > `*` is acceptable only because the pod is unreachable except through the
+  # > ALB - the NetworkPolicy allows ingress from the ALB subnets alone.
+  TRUSTED_PROXIES: {{ .Values.app.trustedProxies | quote }}
+
+  # --- Mail -------------------------------------------------------------------
+  MAIL_MAILER: {{ .Values.mail.mailer | quote }}
+  MAIL_FROM_NAME: {{ .Values.mail.fromName | quote }}
+
+  # --- Runtime ----------------------------------------------------------------
+  PHP_OPCACHE_ENABLE: "1"
+  PHP_OPCACHE_VALIDATE_TIMESTAMPS: "0"
+  NGINX_LISTEN_PORT: {{ .Values.web.containerPort | quote }}
+  {{- with .Values.app.extraEnv }}
+
+  # --- Chart-supplied extras --------------------------------------------------
+  {{- range $key, $value := . }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}

@@ -1,0 +1,70 @@
+# ==============================================================================
+# KEDA - event-driven autoscaling for the queue worker
+# ==============================================================================
+# Chart: kedacore/keda
+# Namespace: keda
+#
+# NO IRSA required for THIS deployment: the ticketing ScaledObject uses the
+# Redis scaler, which authenticates to ElastiCache with the AUTH token (a
+# TriggerAuthentication reading the redis-auth secret), not with AWS IAM. If a
+# future scaler polls SQS/CloudWatch, KEDA's operator SA would then need its own
+# IRSA role - not the case today, so no eks.amazonaws.com/role-arn is set.
+#
+# KEDA scales the worker Deployment from the Redis queue length; the HPA it
+# creates under the hood is why metrics-server must already be running. Install
+# AFTER metrics-server, BEFORE the ticketing release (its ScaledObject is inert
+# without the KEDA CRDs).
+# ==============================================================================
+
+# Pin the operator, metrics-apiserver and admission webhook to system nodes.
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+operator:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+metricsServer:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+webhooks:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
+
+# KEDA exposes Prometheus metrics (scaling decisions, scaler errors) - scrape
+# them to see WHY the worker did or did not scale.
+prometheus:
+  operator:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+  metricServer:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
