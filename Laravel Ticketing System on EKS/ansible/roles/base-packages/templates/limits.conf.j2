@@ -1,0 +1,17 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: base-packages). Manual edits are overwritten.
+#
+# PAM-level limits. Applies to interactive and SSM sessions. systemd units get
+# their ceiling from /etc/systemd/system.conf.d/99-ticketing-limits.conf — both
+# are required, and setting only one is a classic half-fix.
+
+*    soft    nofile    {{ base_packages_nofile_soft }}
+*    hard    nofile    {{ base_packages_nofile_hard }}
+*    soft    nproc     {{ base_packages_nproc_soft }}
+*    hard    nproc     {{ base_packages_nproc_hard }}
+root soft    nofile    {{ base_packages_nofile_soft }}
+root hard    nofile    {{ base_packages_nofile_hard }}
+
+# CIS 1.5.1 — restrict core dumps. A core dump from a process holding a decoded
+# secret writes that secret to disk on a node that may later be snapshotted.
+*    hard    core      0

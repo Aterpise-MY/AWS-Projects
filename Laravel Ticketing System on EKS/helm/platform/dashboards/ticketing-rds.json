@@ -1,0 +1,139 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "Ticketing - RDS Connections",
+  "uid": "ticketing-rds",
+  "tags": ["ticketing", "rds", "database"],
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "60s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Datasource"
+      },
+      {
+        "name": "max_connections",
+        "type": "constant",
+        "query": "85",
+        "current": { "text": "85", "value": "85" },
+        "hide": 2,
+        "label": "max_connections (db.t4g.micro default)"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "gauge",
+      "title": "Connection utilisation vs max_connections",
+      "description": "The metric most likely to catch a real failure before users do. db.t4g.micro caps at ~85 connections; alert TicketingRDSConnectionsHigh fires above 70%. Confirm the ceiling with SHOW VARIABLES LIKE 'max_connections' and update the constant if the parameter group changes it.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "red", "value": 70 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "100 * (aws_rds_database_connections_maximum / ${max_connections})",
+          "legendFormat": "utilisation %"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "DatabaseConnections (max and avg) vs ceiling",
+      "description": "Absolute connection count from CloudWatch via YACE. The dashed ceiling is max_connections; the yellow band is the 70% alert threshold.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 16, "x": 8, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "max_connections ceiling" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "aws_rds_database_connections_maximum",
+          "legendFormat": "connections (max)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "aws_rds_database_connections_average",
+          "legendFormat": "connections (avg)"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "vector(${max_connections})",
+          "legendFormat": "max_connections ceiling"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "vector(${max_connections} * 0.70)",
+          "legendFormat": "70% threshold"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RDS CPU and freeable memory",
+      "description": "Supporting context. Connection exhaustion often precedes a CPU or memory cliff on a micro instance.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 5 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU %" }, "properties": [ { "id": "unit", "value": "percent" } ] },
+          { "matcher": { "id": "byName", "options": "Freeable memory" }, "properties": [ { "id": "unit", "value": "bytes" } ] }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "aws_rds_cpuutilization_average",
+          "legendFormat": "CPU %"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "aws_rds_freeable_memory_average",
+          "legendFormat": "Freeable memory"
+        }
+      ]
+    }
+  ]
+}

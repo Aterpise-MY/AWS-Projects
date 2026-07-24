@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ticketing.fullname" . }}-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ticketing.labels" (dict "ctx" . "component" "worker") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.worker.keda.enabled }}
+  replicas: {{ .Values.worker.replicas }}
+  {{- end }}
+  {{- /*
+    Same reasoning as the web Deployment: when KEDA is enabled it owns replicas
+    through the HPA it creates, and pinning the field here would reset the worker
+    count to 1 on every `helm upgrade`, dropping the fleet mid-backlog.
+  */}}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "ticketing.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ticketing.labels" (dict "ctx" . "component" "worker") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "ticketing.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # 120s. `queue:work` traps SIGTERM, finishes the job it is currently
+      # executing and then exits. The default 30s SIGKILLs a worker mid-job: the
+      # job is neither completed nor released back to the queue, so it is lost
+      # outright and the only trace is a gap in the ticket history. 120s must
+      # exceed the slowest job this application runs.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          # Preferred only, for the same reason as the web Deployment: two AZs,
+          # and KEDA can take this Deployment well past two replicas.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels:
+                    {{- include "ticketing.selectorLabels" (dict "ctx" . "component" "worker") | nindent 20 }}
+      containers:
+        - name: worker
+          image: {{ include "ticketing.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - php
+            - artisan
+            - queue:work
+          args:
+            # 3 attempts, then the job goes to failed_jobs. Without --tries a
+            # poison-pill job is retried forever and permanently occupies a slot.
+            - --tries={{ .Values.worker.tries }}
+            # Exit cleanly after an hour so the Deployment restarts the process.
+            # PHP is long-lived here and leaks: a stale MySQL handle after an RDS
+            # failover, a fragmented heap, an Eloquent model cache holding rows
+            # from before a deploy. Recycling on a timer avoids all of it.
+            - --max-time={{ .Values.worker.maxTime }}
+            # 1s between empty polls. Longer adds latency to every ticket
+            # notification; shorter turns an idle worker into constant Redis load.
+            - --sleep={{ .Values.worker.sleep }}
+            - --queue={{ .Values.worker.queue }}
+          envFrom:
+            {{- include "ticketing.envFrom" . | nindent 12 }}
+          env:
+            {{- include "ticketing.podEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.worker.extraEnv }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          # No HTTP probes: the worker serves no traffic and has no port.
+          # A liveness probe here would need to distinguish "blocked on a slow
+          # job" from "hung", which it cannot do; --max-time already bounds the
+          # process lifetime, which is the outcome a liveness probe would provide.
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # Requests AND limits. KEDA drives replica count from queue depth, but
+          # the Cluster Autoscaler still needs a CPU/memory request to decide
+          # whether a new node is required - without one, KEDA raises the desired
+          # count and the extra pods stay Pending on a full cluster.
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "ticketing.writableVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "ticketing.writableVolumes" . | nindent 8 }}

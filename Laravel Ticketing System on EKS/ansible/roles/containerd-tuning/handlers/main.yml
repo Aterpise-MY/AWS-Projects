@@ -1,0 +1,21 @@
+---
+# roles/containerd-tuning/handlers/main.yml
+
+- name: Reload sysctl for bridge netfilter
+  ansible.builtin.command: sysctl --system
+  changed_when: true
+
+- name: Reload systemd for containerd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# > On a live node this restarts the container runtime. Running containers are
+# > not killed (containerd shims outlive the daemon), but the kubelet loses its
+# > CRI connection for a few seconds and will report the node NotReady if the
+# > restart is slow. Prefer rolling the node group over running this role
+# > against a node that is serving traffic.
+- name: Restart containerd
+  ansible.builtin.systemd_service:
+    name: containerd
+    state: restarted
+    enabled: true

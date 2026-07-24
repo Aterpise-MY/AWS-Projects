@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **13 AWS infrastructure projects** — 11 deployed and tested, plus 2 (Server Room Inspection Dashboard and Systems Manager Automated Patching) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **15 AWS infrastructure projects** — 11 deployed and tested, plus 4 (Server Room Inspection Dashboard, Systems Manager Automated Patching, GitHub Actions ECS Deployment, and Laravel Ticketing on EKS) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -46,6 +46,8 @@ This portfolio showcases **13 AWS infrastructure projects** — 11 deployed and 
 | [Zendesk Ticket Triage](#11-serverless-zendesk-ticket-triage-with-sentiment-analysis) | Lambda + Comprehend | Helpdesk sentiment triage, SLA protection | 2-3 min | ~$4/month |
 | [Server Room Inspection Dashboard](#12-server-room-inspection-dashboard) | ECS Fargate + RDS | Internal ops dashboards, legacy rebuilds | 15-20 min | ~$92/month* |
 | [Systems Manager Automated Patching](#13-systems-manager-automated-patching) | SSM Patch Manager | Fleet OS patching, compliance SLAs | 10-15 min | ~$24/month* |
+| [GitHub Actions ECS Deployment](#14-github-actions-cicd--aws-ecs-fargate) | CI/CD → ECS Fargate | Container continuous delivery, rolling deploys | 8-12 min | ~$67/month* |
+| [Laravel Ticketing on EKS](#15-laravel-ticketing-platform-on-amazon-eks) | EKS + RDS + Redis | Self-hosted help desk, Kubernetes platform | 15-20 min | ~$74-304/month* |
 
 > *Authored and `terraform validate`-clean; not currently deployed ($0 while destroyed).
 
@@ -434,6 +436,67 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
 
 ---
 
+### 14. GitHub Actions CI/CD → AWS ECS (Fargate)
+
+**Location:** `./GitHub Actions ECS Deployment/`
+
+**Description:**
+A continuous-delivery pipeline that ships a containerized storefront API to Amazon ECS on Fargate on every push to `main`, for an e-commerce team (Northwind Commerce) that needs zero-touch releases. Terraform provisions a self-contained VPC (2 public + 2 private subnets, IGW, single NAT Gateway), an internet-facing Application Load Balancer, an ECS Fargate service whose tasks run in private subnets with no public IP, an ECR repository with scan-on-push, IAM roles, CloudWatch logging, and CPU-based Application Auto Scaling. A GitHub Actions workflow builds each commit into a SHA-tagged Docker image, pushes it to ECR, renders a new task-definition revision, and performs a rolling ECS deployment that waits for service stability — so shipping a change is a `git push`.
+
+**Architecture:** GitHub Actions (build → push → deploy) → ECR → Internet → IGW → ALB (public) → Target Group (`type = ip`) → ECS Fargate tasks (private) → CloudWatch Logs
+
+**Key Features:**
+- ✅ `git push` is the deploy — checkout → configure-aws-credentials → ecr-login → docker build/push (`github.sha`) → render task def → rolling ECS deploy (waits for stability)
+- ✅ Terraform and the pipeline own disjoint state — `ignore_changes` on `task_definition`, `desired_count`, `container_definitions` so `apply` never reverts a deploy or a scale-out
+- ✅ Tasks never internet-reachable — private subnets, no public IP; task SG trusts only the ALB SG; egress SNAT'd through NAT Gateway
+- ✅ First-apply bootstrap from `public.ecr.aws/nginx/nginx:latest` so the service is healthy before the ECR repo has any images
+- ✅ Target group `type = ip` (required for Fargate `awsvpc`); ALB HTTP :80 → healthy tasks
+- ✅ Application Auto Scaling target-tracking on CPU 50%, min 2 / max 6, 60s scale-out / 300s scale-in cooldowns
+- ✅ ECR scan-on-push + lifecycle expiry of untagged images after 14 days
+
+**Tech Stack:** Terraform, GitHub Actions, Amazon ECS/Fargate, Amazon ECR, Application Load Balancer, Application Auto Scaling, VPC/NAT Gateway, IAM, CloudWatch
+
+**Cost:** ~$67/month (2 Fargate tasks + ALB + single NAT Gateway; NAT is the largest line item) — $0 while destroyed
+
+**Status:** Authored & `terraform validate`-clean; not yet deployed
+
+**Links:**
+- 📄 [Full Documentation](GitHub%20Actions%20ECS%20Deployment/README.md)
+- 📝 [Resume Summary](Resume/14_GitHub_Actions_ECS_Deployment.md)
+
+---
+
+### 15. Laravel Ticketing Platform on Amazon EKS
+
+**Location:** `./Laravel Ticketing System on EKS/`
+
+**Description:**
+A self-hostable help-desk platform — a Laravel application split into four Kubernetes workloads and run on Amazon EKS 1.36 (arm64 / Graviton) — provisioned end-to-end with Terraform, Packer, Ansible, and Helm. The target is Meridian Support Co., a mid-market B2B SaaS vendor whose ~400 customers carry contractual SLAs and who need SLA logic and attachments in their own AWS account for Singapore (`ap-southeast-1`) data residency. This is the `dev` environment, owned by a small team with no dedicated ops, which drives the whole design toward being cheap, reproducible, and destroyable. The app is decomposed by runtime behaviour into a `web` Deployment (behind an ALB), a `worker` Deployment (KEDA-scaled on Redis queue depth), a `scheduler` CronJob (15-minute SLA sweep), and a `migrate` Helm pre-install hook Job — backed by RDS MySQL 8.0, ElastiCache Redis, S3 attachments, and four Secrets Manager secrets synced by the External Secrets Operator. Every pod-to-AWS call authenticates via IRSA over OIDC (IMDS hop-limited to force it); nodes boot from a Packer golden AMI hardened by a scoped Ansible CIS role. Targets account `022499047467` under the prefix `ticketing-dev` on AWS provider `v6.56.0`.
+
+**Architecture:** GitHub Actions (build arm64 → push ECR → helm upgrade by SHA) → Internet → IGW → ALB (public, `target-type: ip`) → EKS pods (private) → RDS MySQL / ElastiCache Redis (TLS) / S3 / Secrets Manager (via ESO + IRSA)
+
+**Key Features:**
+- ✅ Four-workload decomposition driven by runtime behaviour — `web` / `worker` (KEDA) / `scheduler` (CronJob) / `migrate` (Helm hook)
+- ✅ Zero long-lived credentials — IRSA over OIDC only, IMDS hop limit `1` makes node metadata unreachable from pods
+- ✅ Secrets never in Git or Terraform outputs — External Secrets Operator syncs four Secrets Manager secrets; a dedicated `ticketing-eso` SA owns the SecretStore identity
+- ✅ Cost control is the architecture — `force_destroy` / `recovery_window = 0` / `skip_final_snapshot` make teardown clean; ~$304/mo 24/7 lands at ~$74/mo on a nights/weekends schedule
+- ✅ Honest cost finding — the spec's VPC-endpoint premise inverted at dev scale ($76 fixed vs ~$1 NAT data); kept but gated behind `enable_interface_endpoints` (default ON) as a −$76 lever
+- ✅ ECR mutability split — `ticketing/app` IMMUTABLE (SHA-tagged) + `ticketing/app-cache` MUTABLE so BuildKit layer caching works
+- ✅ Packer golden AMI + scoped Ansible CIS role that documents which controls it skips (to keep the CNI / containerd / kube-proxy working)
+- ✅ 6 real cross-artifact integration issues diagnosed and resolved (Redis key mismatch, ESO identity AccessDenied, Ansible/chart Secret-name drift, missing YACE IRSA role, inverted endpoint cost, absent lockfiles)
+
+**Tech Stack:** Terraform, Amazon EKS, Packer, Ansible, Helm, Amazon ECR, RDS MySQL, ElastiCache Redis, S3, Secrets Manager, External Secrets Operator, KEDA, IRSA/OIDC, GitHub Actions, CloudWatch
+
+**Cost:** ~$304/month 24/7; ~$74/month on a realistic nights/weekends teardown schedule; ~$30/month spin-up-to-test — $0 while destroyed
+
+**Status:** Authored & verified to the ceiling of static validation (`terraform validate` + `helm lint` + `helm template` + `shellcheck` + `php -l` + `terraform fmt`); not yet applied
+
+**Links:**
+- 📄 [Full Documentation](Laravel%20Ticketing%20System%20on%20EKS/README.md)
+- 📝 [Resume Summary](Resume/15_Laravel_Ticketing_EKS.md)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -446,6 +509,7 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
 | Category | Services |
 |----------|----------|
 | **Compute** | EC2, Lambda, App Runner, ECS/Fargate (optional) |
+| **Kubernetes** | Amazon EKS 1.36 (arm64 / Graviton), managed node groups (ON_DEMAND + Spot), OIDC provider, EKS access entries, IRSA |
 | **Container** | App Runner, Amazon ECR, Docker (multi-stage, buildx) |
 | **Load Balancing** | ALB, NLB, API Gateway |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
@@ -455,7 +519,11 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
 | **Real-time / WebSocket** | API Gateway WebSocket (v2), Lambda, DynamoDB GSI fan-out |
 | **AI / NLP** | AWS Comprehend (DetectSentiment) — real-time ticket sentiment triage |
-| **Containers / Orchestration** | ECS Fargate, ECR (scan-on-push), ALB target-type IP |
+| **Containers / Orchestration** | ECS Fargate, ECR (scan-on-push), ALB target-type IP, Application Auto Scaling (CPU target-tracking), EKS + Helm (four-workload Laravel chart) |
+| **Kubernetes autoscaling** | KEDA (Redis queue-depth scaler), Horizontal Pod Autoscaler (CPU), Cluster Autoscaler (node groups) |
+| **Secrets sync** | External Secrets Operator + SecretStore (Secrets Manager → in-cluster Secrets via IRSA) |
+| **Golden images / config mgmt** | Packer (arm64 AL2023 EKS node AMI), Ansible (scoped CIS hardening, containerd tuning) |
+| **CI/CD** | GitHub Actions (build → push to ECR → rolling ECS deploy / `helm upgrade` by SHA); `configure-aws-credentials`, `amazon-ecr-login`, `amazon-ecs-deploy-task-definition` |
 | **Identity / Auth** | Cognito (user pool + hosted UI + OIDC), Directory Service (AD Connector) |
 | **Data / ETL** | AWS Glue (Python-shell backfill), RDS PostgreSQL 16 |
 | **Patch Management** | Systems Manager Patch Manager, Maintenance Windows, Run Command (`AWS-RunPatchBaseline`) |
@@ -721,6 +789,35 @@ AWS Project/                                    # Root portfolio directory
 │   ├── terraform.tfvars.example             # Configuration template
 │   └── .gitignore                           # Excludes state, .terraform/, *.tfvars
 │
+├── GitHub Actions ECS Deployment/            # Project 14: CI/CD → ECS Fargate
+│   ├── .github/
+│   │   └── workflows/
+│   │       └── deploy.yml                   # CI/CD: build → push to ECR → deploy to ECS
+│   ├── README.md                            # Full documentation (15 sections)
+│   ├── main.tf                              # VPC, ALB, ECR, IAM, ECS cluster/service, autoscaling
+│   ├── variables.tf                         # Input variables with validation
+│   ├── outputs.tf                           # ALB DNS, ECR URL, cluster/service names, log group
+│   ├── versions.tf                          # Terraform + AWS provider constraints, default_tags
+│   ├── task-definition.json                 # Fargate task def rendered by the pipeline
+│   ├── terraform.tfvars.example             # Configuration template
+│   └── .gitignore                           # Excludes state, .terraform/, *.tfvars
+│
+├── Laravel Ticketing System on EKS/          # Project 15: Laravel help desk on EKS
+│   ├── app/                                 # Laravel app (web/worker/scheduler/migrate source)
+│   ├── docker/                              # arm64 multi-stage Dockerfile + nginx/php/supervisor
+│   ├── packer/                              # eks-node.pkr.hcl (arm64 AL2023 golden AMI) + AMI cleanup
+│   ├── ansible/                             # roles (cis-hardening, containerd-tuning, ...) + playbooks
+│   ├── terraform/
+│   │   ├── bootstrap/                       # KMS + state bucket + DynamoDB lock (run once)
+│   │   ├── modules/                         # network, eks, ecr, database, cache, storage, secrets
+│   │   └── dev/                             # root: versions/backend/providers/variables/main/outputs
+│   ├── helm/
+│   │   ├── ticketing/                       # app chart: web, worker, scheduler, migrate + ESO hooks
+│   │   └── platform/                        # ALB controller, ESO, KEDA, kube-prometheus, YACE, ...
+│   ├── scripts/                             # bootstrap.sh, rebuild.sh, teardown.sh, cost-report.py
+│   ├── .github/workflows/                   # ci.yml, terraform-plan.yml, build-deploy.yml
+│   └── docs/                                # runbook + cost + architecture notes
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_ALB_Auto_Scaling.md
 │   ├── 2_NLB_Auto_Scaling.md
@@ -734,7 +831,9 @@ AWS Project/                                    # Root portfolio directory
 │   ├── 10_Zendesk_Ticket_Triage.md
 │   ├── 11_Real_time_Polling_App.md
 │   ├── 12_Server_Room_Inspection_Dashboard.md
-│   └── 13_Systems_Manager_Automated_Patching.md
+│   ├── 13_Systems_Manager_Automated_Patching.md
+│   ├── 14_GitHub_Actions_ECS_Deployment.md
+│   └── 15_Laravel_Ticketing_EKS.md
 │
 ├── .github/
 │   └── workflows/                            # CI/CD pipelines
@@ -776,10 +875,12 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Zendesk Ticket Triage | ~$4/month | AWS Comprehend ($0.0001/unit, min 3/req) | Scales with ticket volume; ~$0.70/month at rest (alarms + secret) |
 | Server Room Inspection Dashboard* | ~$92/month | NAT Gateway + ALB + RDS + Fargate | Single shared NAT, single-AZ RDS; $0 while destroyed |
 | Systems Manager Automated Patching* | ~$24/month | EC2 (2 × t3.micro) + public IPv4 | SSM/Maintenance Windows free; stop instances between windows; $0 while destroyed |
+| GitHub Actions ECS Deployment* | ~$67/month | NAT Gateway + ALB + Fargate | Public-subnet tasks or VPC endpoints drop NAT; $0 while destroyed |
+| Laravel Ticketing on EKS* | ~$74-304/month | EKS control plane + VPC endpoints + NAT + RDS + Redis | Teardown nights/weekends (~$74); `enable_interface_endpoints=false` (−$76); $0 while destroyed |
 
 > *Authored & `terraform validate`-clean; not currently deployed, so it bills $0 today.
 
-**Total Estimated Cost:** ~$1,093-1,353/month if all 13 projects were deployed simultaneously (the 2 newest are $0 while destroyed; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
+**Total Estimated Cost:** ~$1,230-1,720/month if all 15 projects were deployed simultaneously (the 4 authored-but-not-deployed projects are $0 while destroyed; the EKS ticketing platform alone ranges ~$74/month on a teardown schedule to ~$304/month if left running 24/7; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
 
 ---
 
@@ -802,6 +903,8 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Zendesk Ticket Triage | ✅ 13 tests | — | — | ✅ Live signed webhook → Comprehend → urgent triage |
 | Server Room Inspection Dashboard | ✅ `validate`-clean (12 modules) | — | — | ⏳ Live smoke tests pending deploy |
 | Systems Manager Automated Patching | ✅ `validate`-clean | — | — | ⏳ Live patch run pending deploy |
+| GitHub Actions ECS Deployment | ✅ `fmt` + `validate`-clean | — | — | ⏳ Live rolling deploy + ALB health pending deploy |
+| Laravel Ticketing on EKS | ✅ `validate` + `fmt` (7 modules + dev) | ✅ `helm lint` + `helm template` | ✅ `shellcheck` + `php -l` (60) + `bash -n` + `py_compile` | ⏳ Live cluster + pod smoke tests pending apply |
 
 ---
 
@@ -835,13 +938,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching | GH Actions ECS | Laravel EKS |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|----------------|-------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) | <100ms (ALB→Fargate, warm) | <100ms (ALB→pod, warm) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave | scales with tasks (2–6) | scales with pods (HPA + KEDA) |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) | 2–6 tasks (CPU autoscaled) | web HPA + worker KEDA (nodes 2–4) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min | 8-12 min | 15-20 min |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A | <2 min (rolling, 2-AZ) | <15 min (single-AZ RDS, dev) |
 
 ---
 
@@ -891,8 +994,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/zendesk-ticket-triage` |
-| **Latest PR** | [PR #28](https://github.com/Aterpise-MY/AWS-Projects/pull/28) |
+| **Current Branch** | `feat/laravel-ticketing-eks` |
+| **Latest PR** | PR #pending (Laravel Ticketing on EKS) |
 
 ---
 
@@ -906,8 +1009,8 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** July 9, 2026 — Projects 12 (Server Room Inspection Dashboard) and 13 (Systems Manager Automated Patching) added; both authored and `terraform validate`-clean, pending deployment  
-**Status:** ✅ 11 projects deployed, tested, documented · 📝 2 authored & validated, pending deployment  
+**Last Updated:** July 24, 2026 — Project 15 (Laravel Ticketing Platform on Amazon EKS) added; authored and verified to the ceiling of static validation, pending deployment  
+**Status:** ✅ 11 projects deployed, tested, documented · 📝 4 authored & validated, pending deployment  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
 🚀 **Happy Deploying!**

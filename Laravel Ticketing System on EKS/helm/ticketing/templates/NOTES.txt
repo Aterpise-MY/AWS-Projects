@@ -1,0 +1,47 @@
+ticketing {{ .Chart.Version }} released as "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Image
+  {{ include "ticketing.image" . }}
+
+Workloads
+  web        Deployment  {{ if .Values.web.autoscaling.enabled }}HPA {{ .Values.web.autoscaling.minReplicas }}-{{ .Values.web.autoscaling.maxReplicas }} @ {{ .Values.web.autoscaling.targetCPUUtilizationPercentage }}% CPU{{ else }}{{ .Values.web.replicas }} replica(s){{ end }}
+  worker     Deployment  {{ if .Values.worker.keda.enabled }}KEDA {{ .Values.worker.keda.minReplicaCount }}-{{ .Values.worker.keda.maxReplicaCount }} on Redis list length{{ else }}{{ .Values.worker.replicas }} replica(s){{ end }}
+  scheduler  CronJob     {{ .Values.scheduler.schedule }} ({{ .Values.scheduler.concurrencyPolicy }})
+  migrate    Job         pre-install,pre-upgrade hook, weight 0
+
+Verify the release
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "ticketing.fullname" . }}-web
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} get ingress {{ include "ticketing.fullname" . }}
+
+Secret chain (hook order -30 -> -20 -> -10 -> 0)
+  kubectl -n {{ .Release.Namespace }} get secretstore,externalsecret
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.externalSecrets.targetSecretName }}
+  A SecretSynced=False condition on the ExternalSecret means the IRSA role cannot
+  read one of the four AWS Secrets Manager secrets. Check the role, not the chart.
+
+{{- if .Values.worker.keda.enabled }}
+
+KEDA queue key - verify against the live cluster, do not assume
+  Rendered listName : {{ include "ticketing.queueListName" . }}
+  Redis DB index    : {{ .Values.redis.db.queue }}
+
+  kubectl -n {{ .Release.Namespace }} get scaledobject {{ include "ticketing.fullname" . }}-worker
+  # from a debug pod with redis-cli against the ElastiCache primary:
+  #   redis-cli -h {{ .Values.redis.host }} -p {{ .Values.redis.port }} {{ if .Values.redis.tls }}--tls {{ end }}-n {{ .Values.redis.db.queue }} KEYS "*queues*"
+
+  A wrong key does NOT error. LLEN on a missing key returns 0, KEDA reads that as
+  an empty queue, and the worker stays at {{ .Values.worker.keda.minReplicaCount }} replica(s) while the backlog grows.
+  If the redis-cli output above disagrees with the rendered listName, the chart is
+  wrong - record the measured value in the runbook and fix .Values.redis.prefix.
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy
+  Enforced only when the VPC CNI addon has ENABLE_NETWORK_POLICY=true (Terraform
+  sets it). Without that flag these objects exist and enforce nothing.
+{{- end }}
+
+Cluster-scoped prerequisites this chart does NOT install
+  aws-load-balancer-controller, external-secrets operator, keda, metrics-server.

@@ -1,0 +1,19 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: containerd-tuning). Manual edits are overwritten.
+#
+# containerd is the last process on this node that should be killed under memory
+# pressure. If the kernel OOM-kills the runtime, every pod on the node goes with
+# it and the node reports NotReady rather than reporting a single evicted pod —
+# a node-level outage caused by one workload's memory bug.
+
+[Service]
+LimitNOFILE={{ containerd_limit_nofile }}
+LimitNPROC={{ containerd_limit_nproc }}
+LimitCORE={{ containerd_limit_core }}
+OOMScoreAdjust={{ containerd_oom_score_adjust }}
+
+# Do not let systemd account containerd's child cgroups against the unit; the
+# kubelet owns pod cgroup accounting and two accountants disagree.
+TasksMax=infinity
+Delegate=yes
+KillMode=process

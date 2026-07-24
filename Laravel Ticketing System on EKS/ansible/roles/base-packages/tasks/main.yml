@@ -1,0 +1,129 @@
+---
+# roles/base-packages/tasks/main.yml
+#
+# Baseline OS packages, time sync, log retention and resource limits.
+#
+# Every task must be safe to re-run. There is no bare `command` or `shell` in
+# this file without a `creates:` or `changed_when:` guard.
+
+- name: Assert the host is Amazon Linux 2023
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Amazon'
+      - ansible_facts['distribution_major_version'] == '2023'
+    fail_msg: >-
+      This role targets Amazon Linux 2023 only. Found
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}.
+    quiet: true
+
+- name: Assert the host is arm64
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] == 'aarch64'
+    fail_msg: >-
+      The ticketing platform is Graviton-only. Found
+      {{ ansible_facts['architecture'] }}.
+    quiet: true
+
+- name: Install baseline operational packages
+  ansible.builtin.dnf:
+    name: "{{ base_packages_install }}"
+    state: present
+    update_cache: true
+  register: base_packages_install_result
+  retries: 3
+  delay: 10
+  until: base_packages_install_result is succeeded
+
+- name: Remove packages that must not be present on a node
+  ansible.builtin.dnf:
+    name: "{{ base_packages_remove }}"
+    state: absent
+
+# timedatectl would work but is not idempotent without a guard. The symlink is
+# what timedatectl actually manipulates, so managing it directly is both
+# idempotent and honest about the mechanism.
+- name: Set the system timezone
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ base_packages_timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+  notify: Restart chronyd
+
+- name: Configure chrony against the Amazon Time Sync Service
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart chronyd
+
+- name: Enable and start chronyd
+  ansible.builtin.systemd_service:
+    name: chronyd
+    enabled: true
+    state: started
+
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Bound journald disk usage
+  ansible.builtin.template:
+    src: journald-limits.conf.j2
+    dest: /etc/systemd/journald.conf.d/99-ticketing-limits.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart systemd-journald
+
+- name: Raise process and file descriptor limits
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: /etc/security/limits.d/99-ticketing.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+# systemd services do not read /etc/security/limits.d, so the same ceiling has
+# to be set again at the system-manager level or containerd and kubelet keep the
+# vendor default. This is a genuinely easy thing to get half-right.
+- name: Create the systemd system.conf drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Raise systemd default limits
+  ansible.builtin.copy:
+    dest: /etc/systemd/system.conf.d/99-ticketing-limits.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (role: base-packages). Manual edits are overwritten.
+      # /etc/security/limits.d is PAM-only and does not apply to systemd units,
+      # so kubelet and containerd need their ceiling set here as well.
+      [Manager]
+      DefaultLimitNOFILE={{ base_packages_nofile_soft }}:{{ base_packages_nofile_hard }}
+      DefaultLimitNPROC={{ base_packages_nproc_soft }}:{{ base_packages_nproc_hard }}
+  notify: Reload systemd daemon
+
+- name: Ensure automatic in-place patching is disabled
+  ansible.builtin.systemd_service:
+    name: dnf-automatic.timer
+    enabled: "{{ base_packages_enable_dnf_automatic }}"
+    state: "{{ 'started' if base_packages_enable_dnf_automatic else 'stopped' }}"
+  failed_when: false
+  changed_when: false
+  # Not an error if the unit is absent — the EKS AMI does not ship
+  # dnf-automatic. The task exists to make the intent explicit and to correct a
+  # node where someone enabled it by hand.

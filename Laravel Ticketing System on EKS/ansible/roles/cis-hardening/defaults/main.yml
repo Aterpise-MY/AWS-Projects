@@ -1,0 +1,202 @@
+---
+# roles/cis-hardening/defaults/main.yml
+#
+# The subset of CIS Amazon Linux 2023 Benchmark controls that can be applied to
+# an EKS worker node without breaking it. See tasks/main.yml for the explicit
+# list of controls that were deliberately NOT applied and why.
+
+# ---------------------------------------------------------------------------
+# Kernel modules
+# ---------------------------------------------------------------------------
+
+# CIS 1.1.1.x — disable unused filesystem drivers.
+# Every one of these is a filesystem no EC2 node will ever mount, and each is a
+# parser reachable from a USB/loopback mount path.
+#
+# NOT in this list, on purpose:
+#   overlay        — containerd's snapshotter. Blacklisting it stops every pod.
+#   br_netfilter   — required for kube-proxy iptables rules to see bridged
+#                    traffic. Blacklisting it silently breaks Service routing.
+#   nf_conntrack   — kube-proxy and the CNI depend on connection tracking.
+#   squashfs       — low value on EC2 and several vendor DaemonSets ship
+#                    squashfs-backed images; the risk of breaking one outweighs
+#                    the marginal hardening.
+cis_blacklist_filesystems:
+  - cramfs
+  - freevxfs
+  - jffs2
+  - hfs
+  - hfsplus
+  - udf
+  - usb-storage
+
+# CIS 3.4.x — disable uncommon network protocols. None of these are used by
+# Kubernetes, the CNI, or any AWS service the node talks to.
+cis_blacklist_protocols:
+  - dccp
+  - sctp
+  - rds
+  - tipc
+
+# ---------------------------------------------------------------------------
+# Kernel parameters — security (CIS section 3)
+# ---------------------------------------------------------------------------
+cis_sysctl_security:
+  # CIS 3.2.2 — do not accept ICMP redirects.
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.secure_redirects: 0
+  net.ipv4.conf.default.secure_redirects: 0
+  # CIS 3.2.1 — do not send ICMP redirects. Safe: the node is not a router for
+  # anything the CNI cares about; pod traffic is routed by the VPC, not by ICMP.
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  # CIS 3.2.3 — refuse source-routed packets.
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.default.accept_source_route: 0
+  # CIS 3.2.4 — log martians.
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.conf.default.log_martians: 1
+  # CIS 3.2.6 — ignore broadcast ICMP.
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  # CIS 3.2.7 — ignore bogus ICMP responses.
+  net.ipv4.icmp_ignore_bogus_error_responses: 1
+  # CIS 3.2.9 — TCP SYN cookies.
+  net.ipv4.tcp_syncookies: 1
+  # CIS 1.5.1 / 1.5.3 — restrict core dumps and enable ASLR.
+  fs.suid_dumpable: 0
+  kernel.randomize_va_space: 2
+  # CIS 1.5.2 — restrict kernel pointer exposure and dmesg to root.
+  kernel.kptr_restrict: 2
+  kernel.dmesg_restrict: 1
+  # Restrict unprivileged BPF and ptrace scope. Not strictly CIS, but both are
+  # container-escape primitives and neither is needed by anything on this node.
+  kernel.unprivileged_bpf_disabled: 1
+  net.core.bpf_jit_harden: 2
+  kernel.yama.ptrace_scope: 1
+  # Hardlink / symlink protection in world-writable dirs (CIS 1.1.x family).
+  fs.protected_hardlinks: 1
+  fs.protected_symlinks: 1
+  fs.protected_fifos: 2
+  fs.protected_regular: 2
+
+# ---------------------------------------------------------------------------
+# Kernel parameters — EKS workload tuning
+# ---------------------------------------------------------------------------
+#
+# These are NOT CIS controls. They exist because AL2023 ships desktop-server
+# defaults and a node running 30+ pods behind an ALB exhausts several of them
+# before it exhausts CPU or memory.
+cis_sysctl_tuning:
+  # Accept queue depth. The default of 4096 is shallow once nginx, php-fpm and
+  # kube-proxy are all listening; overflow shows up as connection resets under
+  # burst, not as an error in any log.
+  net.core.somaxconn: 65535
+  net.ipv4.tcp_max_syn_backlog: 32768
+  net.core.netdev_max_backlog: 32768
+
+  # Ephemeral port range. Every pod-to-Service connection consumes a source
+  # port on the node via kube-proxy SNAT. The AL2023 default of 32768-60999
+  # gives ~28k ports; widening it roughly doubles the ceiling before a worker
+  # pod starts seeing "cannot assign requested address" against RDS or Redis.
+  net.ipv4.ip_local_port_range: "10240 65535"
+  net.ipv4.tcp_tw_reuse: 1
+  net.ipv4.tcp_fin_timeout: 30
+
+  # Connection tracking. kube-proxy in iptables mode creates a conntrack entry
+  # per flow. The default nf_conntrack_max is derived from RAM and is far too
+  # small on a t4g.medium; table exhaustion manifests as random packet drops
+  # with "nf_conntrack: table full, dropping packet" in dmesg and is one of the
+  # least obvious node failure modes there is.
+  net.netfilter.nf_conntrack_max: 524288
+  net.netfilter.nf_conntrack_tcp_timeout_established: 86400
+  net.netfilter.nf_conntrack_buckets: 131072
+
+  # inotify. Every kubelet, every ConfigMap/Secret projected volume, and every
+  # log shipper consumes instances and watches. The AL2023 default of 128
+  # instances is exhausted by roughly 20 pods, after which new pods fail to
+  # start with an opaque "too many open files" from the runtime.
+  fs.inotify.max_user_instances: 8192
+  fs.inotify.max_user_watches: 524288
+  fs.inotify.max_queued_events: 65536
+
+  # File handles and memory maps.
+  fs.file-max: 2097152
+  vm.max_map_count: 262144
+
+  # Memory behaviour. Overcommit must stay permissive or the kubelet's own
+  # accounting fights the kernel's; swappiness is irrelevant (no swap) but is
+  # set explicitly so it is not mistaken for an oversight.
+  vm.overcommit_memory: 1
+  vm.swappiness: 0
+  vm.panic_on_oom: 0
+
+  # ARP cache. A large cluster in a /19 subnet can exceed the default gc
+  # thresholds, which produces intermittent "neighbour table overflow".
+  net.ipv4.neigh.default.gc_thresh1: 4096
+  net.ipv4.neigh.default.gc_thresh2: 8192
+  net.ipv4.neigh.default.gc_thresh3: 16384
+
+# ---------------------------------------------------------------------------
+# Password / account policy (CIS section 5)
+# ---------------------------------------------------------------------------
+cis_login_defs:
+  PASS_MAX_DAYS: "90"
+  PASS_MIN_DAYS: "1"
+  PASS_WARN_AGE: "7"
+  UMASK: "027"
+  ENCRYPT_METHOD: "SHA512"
+
+# CIS 5.4.2 — inactive account lock. 30 days.
+cis_inactive_days: 30
+
+# ---------------------------------------------------------------------------
+# SSH (CIS section 5.2)
+# ---------------------------------------------------------------------------
+#
+# Access to these nodes is via SSM Session Manager. sshd is hardened rather than
+# removed because Packer itself connects over SSH to build the image — you
+# cannot disable the transport you are being provisioned over.
+#
+# Set cis_disable_sshd_at_boot: true to have the finished AMI boot with sshd
+# masked. The security group has no port 22 ingress either way, so this is
+# defence in depth, not the primary control.
+cis_disable_sshd_at_boot: false
+
+cis_sshd_settings:
+  PermitRootLogin: "no"
+  PasswordAuthentication: "no"
+  PermitEmptyPasswords: "no"
+  ChallengeResponseAuthentication: "no"
+  KerberosAuthentication: "no"
+  GSSAPIAuthentication: "no"
+  X11Forwarding: "no"
+  AllowAgentForwarding: "no"
+  AllowTcpForwarding: "no"
+  PermitUserEnvironment: "no"
+  IgnoreRhosts: "yes"
+  HostbasedAuthentication: "no"
+  MaxAuthTries: "4"
+  MaxSessions: "4"
+  LoginGraceTime: "60"
+  ClientAliveInterval: "300"
+  ClientAliveCountMax: "2"
+  LogLevel: "VERBOSE"
+  Banner: "/etc/issue.net"
+
+# ---------------------------------------------------------------------------
+# auditd
+# ---------------------------------------------------------------------------
+cis_enable_auditd: true
+
+# CIS 4.1.1.4 requires an immutable ruleset (-e 2). Deliberately NOT set — see
+# the skipped-controls block in tasks/main.yml.
+cis_auditd_immutable: false
+
+cis_auditd_max_log_file_mb: 32
+cis_auditd_num_logs: 5
+
+cis_banner_text: |
+  This system is the property of the ticketing platform and is restricted to
+  authorised users. All activity is logged to AWS CloudTrail and CloudWatch and
+  may be monitored. Unauthorised access is prohibited.

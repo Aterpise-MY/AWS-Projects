@@ -1,0 +1,20 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: base-packages). Manual edits are overwritten.
+#
+# The root volume is 30 GiB and shared with the containerd image cache. An
+# unbounded journal is a common cause of DiskPressure evictions on long-lived
+# nodes; the cap is here rather than in a monitoring alert because the failure
+# mode is silent until pods start getting evicted.
+#
+# Container logs go to CloudWatch via Fluent Bit, not via journald, so this cap
+# only affects host-level logs.
+
+[Journal]
+Storage=persistent
+Compress=yes
+SystemMaxUse={{ base_packages_journald_max_use }}
+SystemMaxFileSize={{ base_packages_journald_max_file_size }}
+MaxRetentionSec={{ base_packages_journald_max_retention }}
+RateLimitIntervalSec=30s
+RateLimitBurst=10000
+ForwardToSyslog=no

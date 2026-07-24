@@ -1,0 +1,29 @@
+# Patterns to ignore when building Helm packages.
+# Matched against the relative path, one pattern per line.
+.DS_Store
+.git/
+.gitignore
+.bzr/
+.hg/
+.hgignore
+.svn/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.project
+.idea/
+*.tmproj
+.vscode/
+
+# Never package rendered output, cluster state or credentials
+rendered.yaml
+*.rendered.yaml
+kubeconfig
+*.kubeconfig
+.env
+*.tfstate
+*.tfstate.*
+values.local.yaml
+values-*.local.yaml

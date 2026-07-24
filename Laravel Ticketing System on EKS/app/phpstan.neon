@@ -1,0 +1,23 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 6
+
+    paths:
+        - app
+        - config
+        - database
+        - routes
+        - tests
+
+    excludePaths:
+        - vendor
+
+    ignoreErrors:
+        # Eloquent dynamic relations resolved at runtime by Larastan's own stubs.
+        - '#Call to an undefined method Illuminate\\Database\\Eloquent\\Builder#'
+
+    checkMissingIterableValueType: true
+    checkGenericClassInNonGenericObjectType: true
+    reportUnmatchedIgnoredErrors: false

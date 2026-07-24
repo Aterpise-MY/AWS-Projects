@@ -1,0 +1,95 @@
+---
+# ansible/inventory/aws_ec2.yml
+#
+# Dynamic inventory for day-2 operations against live hosts.
+#
+# Boundary: this inventory addresses HOSTS (EC2 instances). It has no view of
+# pods, Deployments, or anything else inside the cluster — Kubernetes owns that
+# layer. Playbooks that need to act on workloads shell out to kubectl from a
+# host that already has cluster credentials (the bastion).
+#
+# The file must be named with an `aws_ec2.yml` / `aws_ec2.yaml` suffix for the
+# plugin's auto-detection to pick it up.
+#
+# Requires: amazon.aws collection (see ansible/requirements.yml) and boto3.
+#
+# Preview the resolved inventory with:
+#   ansible-inventory -i inventory/aws_ec2.yml --graph
+#   ansible-inventory -i inventory/aws_ec2.yml --list
+
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - ap-southeast-1
+
+# Only ever consider instances belonging to this platform. Without this filter a
+# shared account would hand every unrelated instance to a hardening playbook.
+filters:
+  tag:Project: ticketing
+  instance-state-name:
+    - running
+
+# Hosts are addressed over SSM, not by IP, so the inventory hostname is the
+# instance ID. This is also what makes the inventory stable across a node
+# replacement — a private IP is reused, an instance ID never is.
+hostnames:
+  - instance-id
+
+# Group by the two tags that decide what a playbook is allowed to do to a host.
+# Component says what the machine is for; Environment says how careful to be.
+keyed_groups:
+  # Component=compute  -> group component_compute
+  # Component=bastion  -> group component_bastion
+  - key: tags.Component
+    prefix: component
+    separator: "_"
+
+  # Environment=dev -> group env_dev
+  - key: tags.Environment
+    prefix: env
+    separator: "_"
+
+  # Convenience groupings that fall out of the same data.
+  - key: tags['eks:nodegroup-name']
+    prefix: nodegroup
+    separator: "_"
+
+  - key: placement.availability_zone
+    prefix: az
+    separator: "_"
+
+  - key: instance_type
+    prefix: type
+    separator: "_"
+
+# Facts every playbook can rely on without a second API call.
+compose:
+  ansible_host: instance_id
+  ec2_instance_id: instance_id
+  ec2_private_ip: private_ip_address
+  ec2_availability_zone: placement.availability_zone
+  ec2_instance_type: instance_type
+  ec2_ami_id: image_id
+  # Provenance tags written by the Packer build. Answers "which baseline is
+  # this node running?" without logging in.
+  node_git_sha: tags.GitSHA | default('unknown')
+  node_build_timestamp: tags.BuildTimestamp | default('unknown')
+
+# Connect over SSM Session Manager. No SSH keys, no port 22, no bastion host
+# in the network path — access is IAM-authenticated and every session is
+# recorded in CloudTrail.
+#
+# The aws_ssm connection plugin needs an S3 bucket for file transfer; set
+#   export ANSIBLE_AWS_SSM_BUCKET_NAME=<bucket>
+# before running a day-2 playbook. Packer overrides ansible_connection to ssh
+# at bake time because the build instance is not SSM-registered.
+set_variables:
+  ansible_connection: community.aws.aws_ssm
+  ansible_aws_ssm_region: ap-southeast-1
+  ansible_python_interpreter: /usr/bin/python3
+
+strict: False
+cache: True
+cache_plugin: jsonfile
+cache_connection: /tmp/ansible_inventory_cache
+cache_timeout: 300

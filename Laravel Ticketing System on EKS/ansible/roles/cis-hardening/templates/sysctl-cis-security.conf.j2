@@ -1,0 +1,14 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: cis-hardening). Manual edits are overwritten.
+#
+# CIS Amazon Linux 2023 section 1.5 and section 3 security parameters, minus
+# anything that breaks the CNI or the container runtime.
+#
+# NOT SET HERE, on purpose:
+#   net.ipv4.ip_forward = 0             breaks all pod networking (CIS 3.1.1)
+#   net.ipv6.conf.all.disable_ipv6 = 1  removes ::1 (CIS 3.3.x)
+# See roles/cis-hardening/tasks/main.yml for the full skipped-controls rationale.
+
+{% for key, value in cis_sysctl_security | dictsort %}
+{{ key }} = {{ value }}
+{% endfor %}

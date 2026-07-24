@@ -1,0 +1,91 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: cis-hardening). Manual edits are overwritten.
+#
+# CIS section 4 — HOST-level audit ruleset.
+#
+# Scope note: this deliberately does NOT include the full CIS syscall audit set.
+# On a container host every file operation inside every container is a syscall
+# on this host; the full ruleset produces gigabytes per node per day and buries
+# the events that matter. What is audited here is host identity, host privilege
+# and host configuration — the things that indicate someone is operating on the
+# node itself rather than inside a workload.
+#
+# Container-level activity is observed through the EKS audit log
+# (enabled_cluster_log_types includes "audit") and CloudTrail, which is the
+# correct layer for it.
+
+# Reset any previously loaded rules so this file is authoritative.
+-D
+
+# Increase the kernel audit backlog. The default of 8192 drops events under the
+# load a container host generates.
+-b 16384
+--backlog_wait_time 60000
+
+# Failure mode 1 = printk. NOT 2 (panic): panicking a worker node because the
+# audit backlog filled turns a logging problem into an availability incident.
+-f 1
+
+# --- Identity and authentication -------------------------------------------
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock -p wa -k logins
+
+# --- Privilege escalation ---------------------------------------------------
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d/ -p wa -k scope
+-w /var/log/sudo.log -p wa -k actions
+
+# --- Host configuration -----------------------------------------------------
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+-w /etc/sysctl.conf -p wa -k sysctl
+-w /etc/sysctl.d/ -p wa -k sysctl
+-w /etc/modprobe.d/ -p wa -k modules
+-w /etc/systemd/ -p wa -k systemd
+-w /etc/hosts -p wa -k network
+-w /etc/selinux/ -p wa -k mac_policy
+
+# --- Container runtime and kubelet ------------------------------------------
+# Changes to these are changes to how every workload on the node executes.
+-w /etc/containerd/ -p wa -k containerd
+-w /etc/kubernetes/ -p wa -k kubelet
+-w /var/lib/kubelet/config.json -p wa -k kubelet
+-w /usr/bin/containerd -p x -k containerd_exec
+-w /usr/bin/kubelet -p x -k kubelet_exec
+-w /usr/bin/nodeadm -p x -k nodeadm_exec
+
+# --- Kernel module loading --------------------------------------------------
+-w /sbin/insmod -p x -k modules
+-w /sbin/rmmod -p x -k modules
+-w /sbin/modprobe -p x -k modules
+-a always,exit -F arch=b64 -S init_module,delete_module,finit_module -k modules
+
+# --- Privilege-changing syscalls on the host --------------------------------
+-a always,exit -F arch=b64 -S setuid,setgid,setreuid,setregid -F auid>=1000 -F auid!=4294967295 -k privilege_change
+
+# --- Time changes -----------------------------------------------------------
+# Clock manipulation invalidates every timestamp in the audit trail.
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time_change
+-w /etc/localtime -p wa -k time_change
+
+# --- Audit configuration itself ---------------------------------------------
+-w /etc/audit/ -p wa -k auditconfig
+-w /var/log/audit/ -p wa -k auditlog
+
+{% if cis_auditd_immutable | bool %}
+# CIS 4.1.1.4 — immutable ruleset. Off by default: see the skipped-controls
+# block in tasks/main.yml. Once set, rules cannot change without a reboot.
+-e 2
+{% else %}
+# Enabled and mutable. CIS 4.1.1.4 asks for -e 2 (immutable). Deliberately not
+# set: an immutable ruleset needs a reboot to change, which blocks an incident
+# responder from adding a targeted rule during a live investigation and turns
+# any rule mistake into "rebake the AMI". The ruleset is protected by 0600 file
+# permissions and by SSM being the only path onto the host.
+-e 1
+{% endif %}

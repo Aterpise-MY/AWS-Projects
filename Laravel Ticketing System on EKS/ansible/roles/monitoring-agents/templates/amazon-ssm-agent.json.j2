@@ -1,0 +1,28 @@
+{
+  "_comment": "Managed by Ansible (role: monitoring-agents). Manual edits are overwritten. SSM is the ONLY access path to this host: no SSH key is provisioned and the node security group has no port 22 ingress.",
+  "Profile": {
+    "ShareCreds": true,
+    "ShareProfile": ""
+  },
+  "Mds": {
+    "CommandWorkersLimit": 5,
+    "StopTimeoutMillis": 20000
+  },
+  "Ssm": {
+    "HealthFrequencyMinutes": 5,
+    "CustomInventoryDefaultLocation": "",
+    "AssociationLogsRetentionDurationHours": 24,
+    "RunCommandLogsRetentionDurationHours": 336,
+    "SessionLogsRetentionDurationHours": 336
+  },
+  "Agent": {
+    "Region": "",
+    "OrchestrationRootDir": "",
+    "SelfUpdate": false
+  },
+  "Os": {
+    "Lang": "en-US",
+    "Name": "",
+    "Version": "1"
+  }
+}

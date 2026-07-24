@@ -1,0 +1,104 @@
+# ==============================================================================
+# yet-another-cloudwatch-exporter (YACE) - RDS metrics into Prometheus
+# ==============================================================================
+# Chart: nerdswords/yet-another-cloudwatch-exporter
+#
+# WHY YACE over the classic prometheus/cloudwatch-exporter:
+#   - YACE uses the CloudWatch GetMetricData API (batched, cheap) instead of the
+#     per-metric GetMetricStatistics the old exporter uses. On an account with
+#     API-call cost sensitivity this is materially fewer paid calls.
+#   - YACE auto-discovers resources by tag, so we do not hand-maintain a list of
+#     DB instance identifiers - it finds the RDS instance by its tags.
+#   - It natively decorates metrics with resource tags, which keeps the
+#     dashboards stable across a `terraform destroy` + rebuild that changes the
+#     instance identifier.
+# The metric that matters most: aws_rds_database_connections_maximum, the input
+# to alert TicketingRDSConnectionsHigh and the RDS dashboard gauge.
+#
+# max_connections itself is NOT a CloudWatch metric; the 70% comparison uses the
+# literal 85 (db.t4g.micro default) in prometheus-rules.yaml and the RDS
+# dashboard constant. Confirm and record the real value in the runbook.
+# ==============================================================================
+
+# --------------------------------------------------------------------------
+# IRSA. YACE calls cloudwatch:GetMetricData / ListMetrics and tag:GetResources.
+# --------------------------------------------------------------------------
+# The eks module now exposes a dedicated CloudWatch-reading role, trust-scoped
+# to system:serviceaccount:monitoring:yace, with a read-only policy
+# (cloudwatch:GetMetricData, cloudwatch:GetMetricStatistics,
+# cloudwatch:ListMetrics, tag:GetResources). Surfaced as
+# irsa_role_arns["cloudwatch_exporter"]. The ARN below is filled at install by
+# scripts/CI from the Terraform output; it is not hardcoded here.
+serviceAccount:
+  create: true
+  name: yace
+  annotations:
+    # from terraform output irsa_role_arns.cloudwatch_exporter
+    eks.amazonaws.com/role-arn: "REPLACE_ME_irsa_role_arns_cloudwatch_exporter"
+
+# --------------------------------------------------------------------------
+# YACE scrape config. Region from terraform output region (ap-southeast-1).
+# --------------------------------------------------------------------------
+config: |-
+  apiVersion: v1alpha1
+  sts-region: ap-southeast-1
+  discovery:
+    exportedTagsOnMetrics:
+      AWS/RDS:
+        - Project
+        - Environment
+    jobs:
+      - type: AWS/RDS
+        regions:
+          - ap-southeast-1
+        # Discover the ticketing dev database by its default_tags. This survives
+        # a rebuild that changes the DBInstanceIdentifier.
+        searchTags:
+          - key: Project
+            value: ticketing
+          - key: Environment
+            value: dev
+        period: 300
+        length: 300
+        metrics:
+          - name: DatabaseConnections
+            statistics: [Average, Maximum]
+          - name: CPUUtilization
+            statistics: [Average]
+          - name: FreeableMemory
+            statistics: [Average]
+          - name: FreeStorageSpace
+            statistics: [Average]
+          - name: ReadLatency
+            statistics: [Average]
+          - name: WriteLatency
+            statistics: [Average]
+
+# --------------------------------------------------------------------------
+# Scheduling + resources. System node group.
+# --------------------------------------------------------------------------
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+# --------------------------------------------------------------------------
+# ServiceMonitor for Prometheus discovery.
+# --------------------------------------------------------------------------
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  interval: 60s
+  labels:
+    release: kube-prometheus-stack

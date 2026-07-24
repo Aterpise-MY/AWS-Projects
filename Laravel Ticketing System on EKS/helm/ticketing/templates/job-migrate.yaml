@@ -1,0 +1,101 @@
+{{- if .Values.migrate.enabled }}
+{{/*
+  Database migrations - hook weight 0, the last step of the pre-install/pre-upgrade
+  chain (ServiceAccount -30, SecretStore -20, ExternalSecret -10, this Job 0).
+
+  WHY THIS IS A JOB AND NOT AN initContainer
+  ------------------------------------------
+  An initContainer runs once per POD. The web Deployment alone starts at 2 replicas
+  and the HPA takes it to 4, and the worker and scheduler run the same image - so
+  the same migration would be launched by every replica, in parallel, against one
+  MySQL instance. What that produces:
+
+    - concurrent DDL on the same table, which MySQL serialises with metadata locks
+      until one side hits `Lock wait timeout exceeded` and dies;
+    - duplicate rows in the `migrations` ledger, or a half-applied migration
+      recorded as complete;
+    - a rollout that appears to work when a replica wins the race and fails
+      randomly under scale-out, which is the worst possible failure mode because
+      it is not reproducible on a single-replica dev cluster.
+
+  A single Job runs the migration exactly once, before any application pod is
+  created, and a non-zero exit aborts the release instead of leaving a partially
+  migrated schema serving traffic.
+
+  `--isolated` adds a second layer: Laravel takes an application-level lock in the
+  cache store so even two concurrent invocations of this Job (a retry overlapping
+  a manual run) cannot both migrate. `--force` is required because the command
+  refuses to run non-interactively outside local environments.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ticketing.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ticketing.labels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    # before-hook-creation, not hook-succeeded: the failed Job and its pod logs
+    # survive so the failure can actually be read. The next install deletes it.
+    helm.sh/hook-delete-policy: before-hook-creation
+    {{- include "ticketing.annotations" . | nindent 4 }}
+spec:
+  # 1 retry. Enough to survive an RDS failover or a slow ExternalSecret sync;
+  # not enough to spend ten minutes retrying a genuinely broken migration while
+  # the release hangs.
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migrate.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "ticketing.labels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+      annotations:
+        # Istio/Linkerd-style sidecars would keep the pod Running forever after
+        # the command exits; declared here so the reason is obvious if one is
+        # ever added to this namespace.
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "ticketing.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.migrate.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.migrate.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "ticketing.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - php
+            - artisan
+            - migrate
+            - --force
+            - --isolated
+          envFrom:
+            {{- include "ticketing.envFrom" . | nindent 12 }}
+          env:
+            {{- include "ticketing.podEnv" . | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # Requests AND limits. A Job with no requests is BestEffort and is the
+          # first thing evicted under node pressure - mid-migration.
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "ticketing.writableVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "ticketing.writableVolumes" . | nindent 8 }}
+{{- end }}

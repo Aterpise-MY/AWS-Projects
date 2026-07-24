@@ -1,0 +1,19 @@
+{
+  "_comment": "Managed by Ansible (role: containerd-tuning). Merged by nodeadm into the generated kubelet config. The root volume is 30 GiB and shared between the OS, the journal and the containerd image cache; the kubelet defaults of 85/80 leave too little headroom for an image-heavy rollout to land without triggering DiskPressure evictions mid-deploy.",
+  "imageGCHighThresholdPercent": {{ containerd_image_gc_high_threshold_percent }},
+  "imageGCLowThresholdPercent": {{ containerd_image_gc_low_threshold_percent }},
+  "imageMinimumGCAge": "2m",
+  "evictionHard": {
+    "memory.available": "100Mi",
+    "nodefs.available": "10%",
+    "nodefs.inodesFree": "5%"
+  },
+  "evictionSoft": {
+    "nodefs.available": "15%"
+  },
+  "evictionSoftGracePeriod": {
+    "nodefs.available": "2m"
+  },
+  "serializeImagePulls": false,
+  "maxParallelImagePulls": {{ containerd_max_concurrent_downloads }}
+}

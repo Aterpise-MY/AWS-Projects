@@ -1,0 +1,154 @@
+---
+# roles/containerd-tuning/tasks/main.yml
+#
+# Container runtime layer. This role tunes containerd and the kernel modules it
+# depends on. It does NOT configure kubelet's cluster membership — nodeadm does
+# that at first boot from the NodeConfig in the launch template userdata, which
+# Terraform owns.
+
+- name: Ensure CNI and runtime kernel modules load at boot
+  ansible.builtin.template:
+    src: modules-load.conf.j2
+    dest: /etc/modules-load.d/99-containerd.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Gather currently loaded kernel modules
+  ansible.builtin.command: lsmod
+  register: containerd_lsmod
+  changed_when: false
+  check_mode: false
+
+# Loading them now as well as at boot means the sysctl values that depend on
+# them (bridge-nf-call-iptables, nf_conntrack_max) apply during this run rather
+# than only after the next reboot.
+- name: Load required kernel modules now
+  ansible.builtin.command: "modprobe {{ item }}"
+  loop: "{{ containerd_required_modules }}"
+  when: item not in containerd_lsmod.stdout
+  changed_when: true
+  notify: Reload sysctl for bridge netfilter
+
+- name: Ensure bridge netfilter sysctls are set
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/91-containerd-bridge.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (role: containerd-tuning).
+      #
+      # kube-proxy's iptables rules only see bridged traffic when these are on.
+      # They are also the reason br_netfilter must NOT be blacklisted by any CIS
+      # profile applied to this node.
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.bridge.bridge-nf-call-arptables = 1
+  notify: Reload sysctl for bridge netfilter
+
+# ---------------------------------------------------------------------------
+# containerd configuration drop-in
+# ---------------------------------------------------------------------------
+
+- name: Check whether the generated containerd config exists
+  ansible.builtin.stat:
+    path: "{{ containerd_config_path }}"
+  register: containerd_config_stat
+
+- name: Read the generated containerd config
+  ansible.builtin.slurp:
+    src: "{{ containerd_config_path }}"
+  register: containerd_config_content
+  when: containerd_config_stat.stat.exists
+
+- name: Create the containerd drop-in directory
+  ansible.builtin.file:
+    path: "{{ containerd_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the containerd tuning drop-in
+  ansible.builtin.template:
+    src: containerd-tuning.toml.j2
+    dest: "{{ containerd_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart containerd
+
+# A drop-in that is never imported is worse than no drop-in: the scan passes,
+# the file is present, and the setting does nothing. Fail the bake instead.
+- name: Assert the containerd drop-in directory is actually imported
+  ansible.builtin.assert:
+    that:
+      - containerd_config_stat.stat.exists
+      - "'config.d' in (containerd_config_content.content | b64decode)"
+    fail_msg: >-
+      {{ containerd_config_path }} does not import {{ containerd_dropin_dir }},
+      so {{ containerd_dropin_file }} will be silently ignored. Move these
+      values into the nodeadm NodeConfig in the launch template userdata
+      (Terraform: modules/eks), or set containerd_assert_dropin_supported=false
+      if that has already been done.
+    success_msg: "containerd drop-in directory is imported by the generated config."
+    quiet: true
+  when: containerd_assert_dropin_supported | bool
+
+# ---------------------------------------------------------------------------
+# containerd systemd resource limits
+# ---------------------------------------------------------------------------
+
+- name: Create the containerd systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/containerd.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Set containerd resource limits and OOM protection
+  ansible.builtin.template:
+    src: containerd-limits.conf.j2
+    dest: /etc/systemd/system/containerd.service.d/99-ticketing-limits.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd for containerd
+    - Restart containerd
+
+- name: Ensure containerd is enabled
+  ansible.builtin.systemd_service:
+    name: containerd
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# kubelet image garbage collection
+# ---------------------------------------------------------------------------
+#
+# nodeadm merges /etc/kubernetes/kubelet/config.json.d/*.json into the generated
+# kubelet config, so image GC thresholds can be baked without touching the
+# generated file. If a future AMI drops that merge behaviour these values simply
+# revert to the kubelet defaults (85/80) — a degradation, not a breakage, which
+# is why this one is not behind an assert.
+
+- name: Create the kubelet config drop-in directory
+  ansible.builtin.file:
+    path: /etc/kubernetes/kubelet/config.json.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Set kubelet image garbage collection thresholds
+  ansible.builtin.template:
+    src: kubelet-image-gc.json.j2
+    dest: /etc/kubernetes/kubelet/config.json.d/99-ticketing-image-gc.json
+    owner: root
+    group: root
+    mode: "0644"
+  # No handler: kubelet is not running during a bake, and on a live node a
+  # kubelet restart evicts nothing but does re-register the node. Changing GC
+  # thresholds is not worth that on a running node — roll the node group.

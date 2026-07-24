@@ -1,0 +1,53 @@
+---
+# roles/containerd-tuning/defaults/main.yml
+#
+# Container RUNTIME tuning. Not application tuning — nothing here knows the
+# workload is Laravel. These values would be identical for any image-heavy
+# workload on a Graviton Spot node group.
+
+# Modules the CNI and containerd require. These are the inverse of the
+# cis-hardening blacklist: they must be present and must load at boot.
+containerd_required_modules:
+  - overlay
+  - br_netfilter
+  - nf_conntrack
+
+# Concurrent layer pulls. The default of 3 makes a cold-start node with a large
+# PHP image noticeably slower to become Ready. Raising it too far saturates the
+# NAT Gateway that every private-subnet node shares, so 8 is a compromise, not
+# an optimum.
+containerd_max_concurrent_downloads: 8
+
+# containerd's own file descriptor and task ceilings. Independent of the PAM and
+# systemd defaults set by base-packages.
+containerd_limit_nofile: 1048576
+containerd_limit_nproc: "infinity"
+containerd_limit_core: "infinity"
+
+# OOM score. containerd must be one of the last things the kernel kills on a
+# node under memory pressure — killing the runtime takes every pod with it.
+containerd_oom_score_adjust: -999
+
+# Image garbage collection thresholds. The root volume is 30 GiB and shared
+# between the OS, the journal and the image cache.
+containerd_image_gc_high_threshold_percent: 80
+containerd_image_gc_low_threshold_percent: 60
+
+# The EKS AL2023 AMI generates /etc/containerd/config.toml from nodeadm at first
+# boot. Overwriting that file is how you get a node that never joins the
+# cluster. Configuration is added as a drop-in instead.
+#
+# > CAVEAT, and it is a real one: the drop-in is only read if the generated
+# > config.toml contains an `imports` glob covering this directory. That is the
+# > documented nodeadm behaviour, but it is a property of the base AMI and could
+# > change between AMI releases. The bake asserts the import exists (see
+# > tasks/main.yml) and fails loudly rather than shipping a config that is
+# > silently ignored. If the assert fires, move these values into the nodeadm
+# > NodeConfig block in the launch template userdata, which Terraform owns.
+containerd_dropin_dir: /etc/containerd/config.d
+containerd_dropin_file: /etc/containerd/config.d/99-ticketing.toml
+containerd_config_path: /etc/containerd/config.toml
+
+# Fail the run when the drop-in mechanism cannot be verified. Set false only if
+# you have deliberately moved this configuration into userdata.
+containerd_assert_dropin_supported: true

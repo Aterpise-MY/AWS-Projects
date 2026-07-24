@@ -1,0 +1,17 @@
+---
+# roles/base-packages/handlers/main.yml
+
+- name: Restart chronyd
+  ansible.builtin.systemd_service:
+    name: chronyd
+    state: restarted
+    enabled: true
+
+- name: Restart systemd-journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd_service:
+    daemon_reload: true

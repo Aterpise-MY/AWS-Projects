@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+# Managed by Ansible (role: cis-hardening). Manual edits are overwritten.
+#
+# CIS 3.4.x — disable uncommon network protocols. Nothing in the Kubernetes
+# data plane, the VPC CNI, or any AWS service this node talks to uses these.
+
+{% for proto in cis_blacklist_protocols %}
+install {{ proto }} /bin/false
+blacklist {{ proto }}
+{% endfor %}

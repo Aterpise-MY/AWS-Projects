@@ -1,0 +1,20 @@
+---
+# roles/monitoring-agents/handlers/main.yml
+
+# amazon-cloudwatch-agent-ctl translates the JSON config into the TOML the agent
+# actually reads. There is no way to do this with a file module — the TOML is
+# generated, not authored — so the ctl wrapper is the supported path.
+- name: Apply CloudWatch agent configuration
+  ansible.builtin.command: >-
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
+    -a fetch-config
+    -m ec2
+    -s
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+  changed_when: true
+
+- name: Restart SSM agent
+  ansible.builtin.systemd_service:
+    name: amazon-ssm-agent
+    state: restarted
+    enabled: true

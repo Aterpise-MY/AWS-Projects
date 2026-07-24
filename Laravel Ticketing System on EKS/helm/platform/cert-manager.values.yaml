@@ -1,0 +1,77 @@
+# ==============================================================================
+# cert-manager - in-cluster certificate management
+# ==============================================================================
+# Chart: jetstack/cert-manager
+# Namespace: cert-manager
+#
+# NO IRSA by default: cert-manager is here to issue/rotate the admission-webhook
+# certificates that other add-ons (and kube-prometheus-stack's operator) rely
+# on, which needs no AWS access. It would ONLY need an IRSA role if we later add
+# a Route53 DNS-01 ClusterIssuer for public ACME certs - not configured here, so
+# no eks.amazonaws.com/role-arn is set. Public TLS for the ALB is handled by
+# ACM + the load balancer controller, not cert-manager.
+#
+# Install EARLY (before kube-prometheus-stack and external-secrets, both of
+# which have webhooks). CRDs installed by the chart.
+# ==============================================================================
+
+crds:
+  enabled: true
+  keep: true
+
+# Pin controller, webhook and cainjector to the system node group.
+nodeSelector:
+  role: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+webhook:
+  nodeSelector:
+    role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 64Mi
+
+cainjector:
+  nodeSelector:
+    role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 50m
+      memory: 128Mi
+
+# Scrape cert-manager metrics (certificate expiry, renewal errors).
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack

@@ -1,0 +1,477 @@
+---
+# =============================================================================
+# db-maintenance.yml
+#
+# LAYER BOUNDARY — read this before adding anything to this playbook.
+#
+#   Ansible owns DAY-2 OPERATIONS.  Taking a snapshot before a risky change,
+#                                   diffing the live schema against a committed
+#                                   baseline, rotating a credential in Secrets
+#                                   Manager, and telling Kubernetes to pick the
+#                                   new credential up.
+#
+#   Kubernetes owns the WORKLOAD.   Ansible does not restart pods by hand, does
+#                                   not edit Kubernetes Secrets, and does not
+#                                   deploy anything. It asks the control plane
+#                                   for a rolling restart and lets the control
+#                                   plane do it.
+#
+#   Laravel owns SCHEMA CHANGES.    `php artisan migrate` runs as a Helm
+#                                   pre-install/pre-upgrade hook Job, not from
+#                                   here. This playbook only observes the schema
+#                                   and reports drift; it never alters it.
+#
+#   THIS PLAYBOOK DOES NOT DEPLOY THE APPLICATION.
+#
+# -----------------------------------------------------------------------------
+# Three operations, each independently selectable by tag:
+#
+#   --tags snapshot    On-demand RDS snapshot. Always safe. Run before anything.
+#   --tags schema      Dump the live schema and diff it against the committed
+#                      baseline. Read-only.
+#   --tags rotate      Rotate the DB password in RDS and Secrets Manager, then
+#                      roll the dependent Deployments. DESTRUCTIVE — requires
+#                      -e confirm_rotation=true.
+#
+# Typical use:
+#   ansible-playbook playbooks/db-maintenance.yml --tags snapshot
+#   ansible-playbook playbooks/db-maintenance.yml --tags schema
+#   ansible-playbook playbooks/db-maintenance.yml --tags rotate \
+#     -e confirm_rotation=true
+#
+# Split across three plays because the operations run from different places:
+# AWS control-plane calls run from the operator's host, and anything that speaks
+# MySQL runs from the bastion, which is the only thing with a network path to a
+# private-subnet RDS instance.
+# =============================================================================
+
+
+# =============================================================================
+# PLAY 1 — Pre-flight and snapshot (AWS control plane, from the operator host)
+# =============================================================================
+- name: "DB maintenance: pre-flight and snapshot"
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: false
+
+  vars:
+    aws_region: "ap-southeast-1"
+    name_prefix: "ticketing-dev"
+    db_instance_identifier: "{{ name_prefix }}-mysql"
+    db_secret_name: "{{ name_prefix }}/database"
+    snapshot_reason: "manual"
+    confirm_rotation: false
+
+  tasks:
+    - name: Announce the layer boundary
+      ansible.builtin.debug:
+        msg: >-
+          Day-2 database operations. This playbook does not deploy the
+          application and does not alter the schema.
+      tags: [always]
+
+    - name: Build a deterministic snapshot identifier
+      ansible.builtin.set_fact:
+        db_snapshot_id: >-
+          {{ db_instance_identifier }}-{{ snapshot_reason }}-{{
+             lookup('pipe', 'date -u +%Y%m%d-%H%M%S') }}
+      tags: [always]
+
+    - name: Confirm the RDS instance exists and is available
+      amazon.aws.rds_instance_info:
+        db_instance_identifier: "{{ db_instance_identifier }}"
+        region: "{{ aws_region }}"
+      register: db_instance_info
+      tags: [always]
+
+    - name: Assert the instance is in a snapshottable state
+      ansible.builtin.assert:
+        that:
+          - db_instance_info.instances | length == 1
+          - db_instance_info.instances[0].db_instance_status == 'available'
+        fail_msg: >-
+          {{ db_instance_identifier }} is not available
+          (status: {{ db_instance_info.instances[0].db_instance_status | default('not found') }}).
+          Refusing to operate on it.
+        quiet: true
+      tags: [always]
+
+    # Taken first, on purpose. Everything after this point is either read-only
+    # or reversible from this snapshot.
+    - name: Take an on-demand RDS snapshot
+      amazon.aws.rds_instance_snapshot:
+        db_instance_identifier: "{{ db_instance_identifier }}"
+        db_snapshot_identifier: "{{ db_snapshot_id }}"
+        region: "{{ aws_region }}"
+        state: present
+        wait: true
+        wait_timeout: 1800
+        tags:
+          Project: ticketing
+          Environment: dev
+          ManagedBy: ansible
+          Component: data
+          AutoDelete: "true"
+          Reason: "{{ snapshot_reason }}"
+      register: db_snapshot_result
+      tags: [snapshot, rotate]
+      # > Manual snapshots are NOT covered by backup_retention_period and are
+      # > NOT deleted when the instance is destroyed. That is the point — this
+      # > is the artefact you want to still exist after a bad migration — but it
+      # > also means they accumulate and bill. They are tagged AutoDelete=true so
+      # > the account's cleanup pass can find them.
+
+    - name: Report the snapshot
+      ansible.builtin.debug:
+        msg: >-
+          Snapshot {{ db_snapshot_id }} created
+          ({{ db_snapshot_result.allocated_storage | default('?') }} GiB).
+      when: db_snapshot_result is defined and db_snapshot_result is not skipped
+      tags: [snapshot, rotate]
+
+
+# =============================================================================
+# PLAY 2 — Schema diff (runs on the bastion; only it can reach private RDS)
+# =============================================================================
+- name: "DB maintenance: schema drift check"
+  hosts: "{{ target_hosts | default('component_bastion') }}"
+  gather_facts: false
+  become: false
+
+  vars:
+    aws_region: "ap-southeast-1"
+    name_prefix: "ticketing-dev"
+    db_secret_name: "{{ name_prefix }}/database"
+    db_name: "ticketing"
+    # Committed baseline. On the first run this file does not exist and the
+    # play writes it; from then on any difference is drift that someone has to
+    # explain.
+    schema_baseline_path: "{{ playbook_dir }}/../files/schema-baseline.sql"
+    schema_dump_remote: "/tmp/ticketing-schema-live.sql"
+
+  tasks:
+    - name: Fetch database credentials from Secrets Manager
+      ansible.builtin.command:
+        argv:
+          - aws
+          - secretsmanager
+          - get-secret-value
+          - --secret-id
+          - "{{ db_secret_name }}"
+          - --region
+          - "{{ aws_region }}"
+          - --query
+          - SecretString
+          - --output
+          - text
+      register: db_secret_raw
+      changed_when: false
+      no_log: true
+      tags: [schema]
+      # Fetched on the bastion using its instance profile rather than passed in
+      # from the operator host, so the credential never transits the operator's
+      # shell history or Ansible's fact cache.
+
+    - name: Parse database credentials
+      ansible.builtin.set_fact:
+        db_credentials: "{{ db_secret_raw.stdout | from_json }}"
+      no_log: true
+      tags: [schema]
+
+    # --no-data: structure only. This must never dump ticket contents onto a
+    # bastion's local disk.
+    - name: Dump the live schema
+      ansible.builtin.shell:
+        cmd: >-
+          mysqldump
+          --host='{{ db_credentials.host }}'
+          --port='{{ db_credentials.port }}'
+          --user='{{ db_credentials.username }}'
+          --no-data
+          --skip-comments
+          --skip-dump-date
+          --single-transaction
+          --set-gtid-purged=OFF
+          --routines
+          --triggers
+          '{{ db_credentials.dbname | default(db_name) }}'
+          > '{{ schema_dump_remote }}'
+        executable: /bin/bash
+      environment:
+        MYSQL_PWD: "{{ db_credentials.password }}"
+      register: db_schema_dump
+      changed_when: false
+      no_log: true
+      tags: [schema]
+      # MYSQL_PWD rather than --password= so the credential never appears in the
+      # process list on a shared host. changed_when is false because a dump is a
+      # read, not a change.
+
+    - name: Normalise AUTO_INCREMENT counters out of the dump
+      ansible.builtin.replace:
+        path: "{{ schema_dump_remote }}"
+        regexp: '\s*AUTO_INCREMENT=\d+'
+        replace: ''
+      changed_when: false
+      tags: [schema]
+      # AUTO_INCREMENT counters move on every insert. Leaving them in makes the
+      # diff fire on normal traffic and trains everyone to ignore it.
+
+    - name: Retrieve the live schema to the control host
+      ansible.builtin.fetch:
+        src: "{{ schema_dump_remote }}"
+        dest: "/tmp/ticketing-schema-live.sql"
+        flat: true
+      changed_when: false
+      tags: [schema]
+
+    - name: Remove the schema dump from the bastion
+      ansible.builtin.file:
+        path: "{{ schema_dump_remote }}"
+        state: absent
+      tags: [schema]
+
+    - name: Check whether a committed baseline exists
+      ansible.builtin.stat:
+        path: "{{ schema_baseline_path }}"
+      delegate_to: localhost
+      register: schema_baseline_stat
+      tags: [schema]
+
+    - name: Seed the baseline on first run
+      ansible.builtin.copy:
+        src: "/tmp/ticketing-schema-live.sql"
+        dest: "{{ schema_baseline_path }}"
+        mode: "0644"
+      delegate_to: localhost
+      when: not schema_baseline_stat.stat.exists
+      tags: [schema]
+
+    - name: Diff the live schema against the committed baseline
+      ansible.builtin.command:
+        argv:
+          - diff
+          - -u
+          - "{{ schema_baseline_path }}"
+          - "/tmp/ticketing-schema-live.sql"
+      delegate_to: localhost
+      register: schema_diff
+      changed_when: false
+      failed_when: schema_diff.rc > 1
+      when: schema_baseline_stat.stat.exists
+      tags: [schema]
+      # diff exits 0 for identical, 1 for different, >1 for an actual error.
+
+    - name: Report schema drift
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Schema matches the committed baseline.'
+             if schema_diff.rc | default(0) == 0
+             else 'SCHEMA DRIFT DETECTED. Review the diff below and either
+                   commit the new baseline or find the migration that was not
+                   applied through the Helm hook.' }}
+      when: schema_baseline_stat.stat.exists
+      tags: [schema]
+
+    - name: Show the schema diff
+      ansible.builtin.debug:
+        var: schema_diff.stdout_lines
+      when:
+        - schema_baseline_stat.stat.exists
+        - schema_diff.rc | default(0) == 1
+      tags: [schema]
+
+
+# =============================================================================
+# PLAY 3 — Credential rotation (AWS control plane + a Kubernetes rollout)
+# =============================================================================
+- name: "DB maintenance: rotate the database password"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars:
+    aws_region: "ap-southeast-1"
+    name_prefix: "ticketing-dev"
+    cluster_name: "ticketing-dev"
+    db_instance_identifier: "{{ name_prefix }}-mysql"
+    db_secret_name: "{{ name_prefix }}/database"
+    k8s_namespace: "ticketing"
+    # The scheduler is a CronJob and picks up the new secret on its next
+    # invocation, so it is deliberately not in this list.
+    k8s_dependent_deployments:
+      - ticketing-web
+      - ticketing-worker
+    external_secret_name: "ticketing-app"
+    confirm_rotation: false
+    rotation_password_length: 32
+
+  tasks:
+    - name: Require explicit confirmation before rotating
+      ansible.builtin.assert:
+        that:
+          - confirm_rotation | bool
+        fail_msg: >-
+          Rotation changes the live database password and forces a rolling
+          restart of every dependent Deployment. Re-run with
+          -e confirm_rotation=true once you have confirmed a snapshot exists.
+        quiet: true
+      tags: [rotate]
+
+    - name: Read the current secret so non-credential fields survive rotation
+      amazon.aws.secretsmanager_secret_info:
+        name: "{{ db_secret_name }}"
+        region: "{{ aws_region }}"
+      register: db_secret_meta
+      tags: [rotate]
+
+    - name: Fetch the current secret value
+      ansible.builtin.set_fact:
+        db_current_secret: >-
+          {{ lookup('amazon.aws.secretsmanager_secret',
+                    db_secret_name,
+                    region=aws_region) | from_json }}
+      no_log: true
+      tags: [rotate]
+
+    # Character set excludes / " @ and backslash: those break RDS master
+    # password validation and ElastiCache AUTH tokens, and the same generator is
+    # reused for both elsewhere in this stack.
+    - name: Generate a new password
+      ansible.builtin.set_fact:
+        db_new_password: >-
+          {{ lookup('community.general.random_string',
+                    length=rotation_password_length,
+                    special=true,
+                    override_special='!#$%&*+-=?_',
+                    min_lower=1, min_upper=1, min_numeric=1, min_special=1) }}
+      no_log: true
+      tags: [rotate]
+
+    # Order matters and is not negotiable:
+    #   RDS first  -> if this fails, Secrets Manager still holds the working
+    #                 credential and nothing is broken.
+    #   Secrets Manager second -> a brief window where pods hold the old
+    #                 password and RDS has the new one. Existing connections in
+    #                 Laravel's pool survive; new connections fail until the
+    #                 rollout completes, which is why the rollout follows
+    #                 immediately.
+    #   Rollout third.
+    - name: Set the new master password on the RDS instance
+      amazon.aws.rds_instance:
+        db_instance_identifier: "{{ db_instance_identifier }}"
+        region: "{{ aws_region }}"
+        state: present
+        master_user_password: "{{ db_new_password }}"
+        apply_immediately: true
+        force_update_password: true
+      no_log: true
+      register: db_password_change
+      tags: [rotate]
+
+    - name: Wait for the instance to leave the modifying state
+      amazon.aws.rds_instance_info:
+        db_instance_identifier: "{{ db_instance_identifier }}"
+        region: "{{ aws_region }}"
+      register: db_post_rotate
+      until: db_post_rotate.instances[0].db_instance_status == 'available'
+      retries: 30
+      delay: 20
+      changed_when: false
+      tags: [rotate]
+
+    - name: Write the new credential to Secrets Manager
+      community.aws.secretsmanager_secret:
+        name: "{{ db_secret_name }}"
+        region: "{{ aws_region }}"
+        state: present
+        secret_type: string
+        secret: >-
+          {{ (db_current_secret | combine({'password': db_new_password})) | to_json }}
+      no_log: true
+      tags: [rotate]
+      # The whole JSON document is rewritten with only `password` replaced, so
+      # host/port/dbname/username set by Terraform are preserved. Overwriting
+      # the secret with a bare password string here would break the External
+      # Secrets template and take the application down.
+
+    # External Secrets syncs on its own refreshInterval. Annotating the resource
+    # forces an immediate reconcile so the Kubernetes Secret is current BEFORE
+    # the rollout starts — restarting first would just recreate pods holding the
+    # stale password.
+    - name: Force an immediate External Secrets reconcile
+      kubernetes.core.k8s:
+        api_version: external-secrets.io/v1beta1
+        kind: ExternalSecret
+        name: "{{ external_secret_name }}"
+        namespace: "{{ k8s_namespace }}"
+        state: patched
+        definition:
+          metadata:
+            annotations:
+              force-sync: "{{ lookup('pipe', 'date -u +%s') }}"
+      tags: [rotate]
+
+    - name: Wait for the External Secret to report Ready
+      kubernetes.core.k8s_info:
+        api_version: external-secrets.io/v1beta1
+        kind: ExternalSecret
+        name: "{{ external_secret_name }}"
+        namespace: "{{ k8s_namespace }}"
+      register: external_secret_status
+      until: >-
+        external_secret_status.resources[0].status.conditions
+        | default([])
+        | selectattr('type', 'equalto', 'Ready')
+        | selectattr('status', 'equalto', 'True')
+        | list | length > 0
+      retries: 20
+      delay: 5
+      changed_when: false
+      tags: [rotate]
+
+    # Ansible asks the control plane for a rolling restart; it does not touch
+    # pods. Kubernetes owns rollout ordering, surge, and readiness gating.
+    - name: Trigger a rolling restart of dependent Deployments
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}"
+        namespace: "{{ k8s_namespace }}"
+        state: patched
+        definition:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  kubectl.kubernetes.io/restartedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      loop: "{{ k8s_dependent_deployments }}"
+      tags: [rotate]
+
+    - name: Wait for each Deployment to finish rolling
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}"
+        namespace: "{{ k8s_namespace }}"
+      register: rollout_status
+      loop: "{{ k8s_dependent_deployments }}"
+      until: >-
+        rollout_status.resources[0].status.updatedReplicas | default(0)
+        == rollout_status.resources[0].spec.replicas | default(1)
+        and rollout_status.resources[0].status.unavailableReplicas | default(0) == 0
+      retries: 40
+      delay: 15
+      changed_when: false
+      tags: [rotate]
+
+    - name: Report the rotation outcome
+      ansible.builtin.debug:
+        msg:
+          - "Password rotated on {{ db_instance_identifier }} and written to {{ db_secret_name }}."
+          - "External Secret {{ external_secret_name }} reconciled; Deployments {{ k8s_dependent_deployments | join(', ') }} rolled."
+          - "The scheduler CronJob picks up the new credential on its next invocation — no action needed."
+          - "The new password is not printed anywhere. Read it from Secrets Manager if you need it."
+      tags: [rotate]
