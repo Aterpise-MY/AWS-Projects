@@ -1,0 +1,33 @@
+# Standalone ArgoCD Application manifest.
+#
+# Terraform already creates an equivalent Application via the argocd-apps Helm
+# release (see terraform/argocd.tf). This file is provided for the manual
+# GitOps workflow described in the README:
+#
+#   kubectl apply -f manifests/app.yaml
+#
+# Edit spec.source.repoURL / path / targetRevision to point at your own repo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app
+  namespace: argocd
+  # Keep the Application around until it is explicitly deleted, and let ArgoCD
+  # cascade-delete the resources it manages.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

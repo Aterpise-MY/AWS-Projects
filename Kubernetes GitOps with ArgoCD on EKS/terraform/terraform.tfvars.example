@@ -1,0 +1,31 @@
+# Copy to terraform.tfvars and adjust as needed.
+
+region             = "us-east-1"
+cluster_name       = "gitops-eks"
+kubernetes_version = "1.30"
+
+# Networking
+vpc_cidr = "10.0.0.0/16"
+
+# Worker node group
+node_instance_type = "t3.medium"
+node_desired_size  = 2
+node_min_size      = 2
+node_max_size      = 4
+
+# ArgoCD
+argocd_chart_version = "7.7.5"
+argocd_namespace     = "argocd"
+
+# GitOps source of truth — point this at YOUR repo/path to deploy your own app.
+gitops_repo_url        = "https://github.com/argoproj/argocd-example-apps.git"
+gitops_path            = "guestbook"
+gitops_target_revision = "HEAD"
+gitops_dest_namespace  = "default"
+
+tags = {
+  Project     = "kubernetes-gitops-argocd"
+  Environment = "demo"
+  ManagedBy   = "terraform"
+  Owner       = "platform-team"
+}

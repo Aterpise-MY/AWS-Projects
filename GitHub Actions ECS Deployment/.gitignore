@@ -1,0 +1,12 @@
+# Terraform state & lock
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Local variable overrides (may contain account-specific values)
+terraform.tfvars
+
+# Crash logs
+crash.log
+crash.*.log

@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **15 AWS infrastructure projects** — 11 deployed and tested, plus 4 (Server Room Inspection Dashboard, Systems Manager Automated Patching, GitHub Actions ECS Deployment, and Laravel Ticketing on EKS) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **16 AWS infrastructure projects** — 12 deployed and tested, plus 4 (Server Room Inspection Dashboard, Systems Manager Automated Patching, GitHub Actions ECS Deployment, and Laravel Ticketing on EKS) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -48,6 +48,7 @@ This portfolio showcases **15 AWS infrastructure projects** — 11 deployed and 
 | [Systems Manager Automated Patching](#13-systems-manager-automated-patching) | SSM Patch Manager | Fleet OS patching, compliance SLAs | 10-15 min | ~$24/month* |
 | [GitHub Actions ECS Deployment](#14-github-actions-cicd--aws-ecs-fargate) | CI/CD → ECS Fargate | Container continuous delivery, rolling deploys | 8-12 min | ~$67/month* |
 | [Laravel Ticketing on EKS](#15-laravel-ticketing-platform-on-amazon-eks) | EKS + RDS + Redis | Self-hosted help desk, Kubernetes platform | 15-20 min | ~$74-304/month* |
+| [Icebreaker Poll Game](#16-icebreaker-poll-game--human-vs-ai-live-audience-poll) | ECS Fargate + DynamoDB | Live audience polling, conference segments | 10-15 min | ~$92/month; ~$10/event |
 
 > *Authored and `terraform validate`-clean; not currently deployed ($0 while destroyed).
 
@@ -497,6 +498,38 @@ A self-hostable help-desk platform — a Laravel application split into four Kub
 
 ---
 
+### 16. Icebreaker Poll Game — Human vs AI Live Audience Poll
+
+**Location:** `./Icebreaker Poll Game/` (separate repository — [Aterpise-MY/Icebreaker-Poll-Game](https://github.com/Aterpise-MY/Icebreaker-Poll-Game), branch `master`)
+
+**Description:**
+A live audience poll built for the 15-minute opening segment of a conference talk. Three hundred people in a room scan one QR code, each phone answers a question — "did a human or an AI write this?" — and the projector reveals the split. The entire design is shaped by one constraint that ordinary web apps never face: **there is no second attempt.** The segment runs once, in front of the room, and every architectural decision is a hedge against a specific way that afternoon could go wrong. There are **no WebSockets** (a reconnect storm across 300 phones on venue wifi is worse than polling); the **server runs no timer at all** (`/state` returns `phaseEndsAt` + `serverNow` and clients measure their own clock offset, corrected for half the round trip); and **`/health` deliberately does not touch DynamoDB**, because a dependency check would fail every task's health check simultaneously, strip the ALB of healthy targets, and let ECS turn a self-healing blip into a 90-second self-inflicted outage. One container serves the built React frontend and the API from a single origin, so there is no CORS and no second base URL to get wrong. Runs in `ap-southeast-1` under the prefix `poll-game`.
+
+**Architecture:** GitHub Actions (build arm64 → push Docker Hub → ECS rolling deploy) → Internet → Route53 + ACM → ALB (HTTPS :443, HTTP→HTTPS 301) → ECS Fargate ARM64 × 2 (public subnets, no NAT) → DynamoDB single table (10 tally shards) + S3 media bucket
+
+**Key Features:**
+- ✅ Poll-based, not push-based — phones poll `/state` every 2s and the projector every 1s; a server-authoritative deadline plus client-side clock-offset correction means no socket to drop and nothing to reconnect
+- ✅ **`/health` is liveness-only by design** — the one health check that must not be "thorough", with the outage arithmetic written into the Terraform and the server alike
+- ✅ **Write sharding driven by a real measurement** — a 300-player load test on the deployed stack produced **537 `TransactionConflict` retries** on the single hot tally item; votes now land on one of 10 shards and reads sum them, trading a read-heavy cost multiplier for the removal of a synchronised write burst
+- ✅ Content pipeline makes a wrong answer on the projector structurally impossible — one authored source file generates both the question texts and the fingerprinted answer key, and the Docker build fails if they drift
+- ✅ Atomic voting — one `TransactWriteItems` puts the conditional voter record and increments the shard together; operator writes use optimistic concurrency, so a double-clicked button gets `409 CONFLICT` instead of double-advancing the show
+- ✅ Operator console built for the failure modes — a real 20-deep undo stack, "skip this question" refused on the last question, and an operator-driven segment clock the projector never displays (a countdown on the wall turns a slot into a deadline in front of the room)
+- ✅ Private Docker Hub pull via Secrets Manager `repositoryCredentials` resolved by the ECS **execution** role — no registry credentials in the image, the task, or Terraform state
+- ✅ Cost-shaped for a single afternoon — no NAT Gateway (public subnets + a security group that only accepts the ALB), FARGATE-only capacity (a Spot interruption notice mid-reveal is not worth the savings), and a `teardown.sh` that scales to zero before destroying
+- ✅ **139 backend unit tests** plus a 19-check end-to-end smoke suite that boots its own server
+
+**Tech Stack:** Terraform, ECS Fargate (ARM64/Graviton), ALB, ACM, Route53, DynamoDB (single-table + TTL + TransactWriteItems), S3, Secrets Manager, IAM, CloudWatch Logs, Docker (buildx arm64), GitHub Actions + OIDC, Node 20 (zero-dependency HTTP server), React 18 + Vite
+
+**Cost:** ~$92/month if left running 24/7 (Fargate ~$72, ALB ~$18); ~$10 for a realistic event window (stack up for ACM validation and rehearsal, torn down the day after); $0 once destroyed
+
+**Status:** ✅ Deployed, load-tested at 300 concurrent players, and run against live AWS — `master` is 45+ commits ahead of the local checkout
+
+**Links:**
+- 📄 [Full Documentation](Icebreaker%20Poll%20Game/README.md)
+- 📝 [Resume Summary](Resume/16_Icebreaker_Poll_Game.md)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -513,7 +546,9 @@ A self-hostable help-desk platform — a Laravel application split into four Kub
 | **Container** | App Runner, Amazon ECR, Docker (multi-stage, buildx) |
 | **Load Balancing** | ALB, NLB, API Gateway |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
+| **DynamoDB patterns** | Single-table design, TTL, `TransactWriteItems` (atomic vote + counter), optimistic concurrency, write sharding for hot items, `BatchGetItem` folding |
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
+| **TLS / DNS** | ACM (DNS-validated certificates), Route53 hosted zones + alias records, ALB TLS 1.3 policy, HTTP→HTTPS 301 redirect |
 | **GraphQL** | AWS AppSync, VTL resolvers |
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
@@ -529,6 +564,7 @@ A self-hostable help-desk platform — a Laravel application split into four Kub
 | **Patch Management** | Systems Manager Patch Manager, Maintenance Windows, Run Command (`AWS-RunPatchBaseline`) |
 | **Notifications** | Amazon SES, EventBridge (scheduled breach digests) |
 | **Security** | KMS (customer-managed CMK), Secrets Manager, IAM, WAF (optional), Security Groups, HMAC webhook verification |
+| **Private registry pull** | Private Docker Hub repository + Secrets Manager `repositoryCredentials`, resolved by the ECS **execution** role (no registry credentials in the image, the task, or Terraform state) |
 | **Storage** | S3, EBS, Snapshots |
 | **Monitoring** | CloudWatch Logs, Metrics, Alarms, Dashboards |
 | **Management** | Terraform, Systems Manager, CloudTrail |
@@ -551,7 +587,8 @@ A self-hostable help-desk platform — a Laravel application split into four Kub
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 130+ automated tests across all projects  
+✅ **Comprehensive Testing** — 288+ automated tests across all projects  
+✅ **Load-Tested Under Real Contention** — a 300-concurrent-player run surfaced 537 DynamoDB `TransactionConflict` retries on one hot item, which drove a write-sharding redesign  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
 **Performance Metrics:**
@@ -818,6 +855,30 @@ AWS Project/                                    # Root portfolio directory
 │   ├── .github/workflows/                   # ci.yml, terraform-plan.yml, build-deploy.yml
 │   └── docs/                                # runbook + cost + architecture notes
 │
+├── Icebreaker Poll Game/                     # Project 16: live audience poll (own git repo)
+│   ├── content/questions.source.json         # the ONLY hand-authored content file
+│   ├── backend/                              # Node 20, zero-dependency HTTP server
+│   │   ├── game.js                           # pure state machine — no I/O, no clock
+│   │   ├── router.js                         # transport-agnostic request handling
+│   │   ├── server.js                         # entry point: static + API + SPA fallback
+│   │   ├── static.js                         # in-memory asset manifest (ETags, gzip)
+│   │   ├── media.js                          # picture / audio / video storage (S3 or memory)
+│   │   ├── tally.js                          # 10 vote shards — kills TransactionConflict
+│   │   ├── store-dynamo.js                   # DynamoDB single-table storage
+│   │   └── store-memory.js                   # in-process store for local runs
+│   ├── frontend/                             # React 18 + Vite
+│   │   └── src/routes/                       # Phone, Screen, Screen2, Operator, Setup, JoinBoard
+│   ├── infra/                                # Terraform: VPC, ALB, ACM, ECS, DynamoDB, S3
+│   ├── scripts/
+│   │   ├── build-content.mjs                 # generates question texts + fingerprinted answer key
+│   │   ├── state-backend.sh                  # S3 state bucket + lock table (run once)
+│   │   ├── dockerhub-secret.sh               # Docker Hub PAT → Secrets Manager (run once)
+│   │   ├── bootstrap.sh / deploy.sh          # first-time setup; build, push, roll
+│   │   ├── teardown.sh                       # scale to zero, then destroy
+│   │   └── smoke.sh                          # 19 end-to-end API checks
+│   ├── .github/workflows/                    # ci.yml (5 jobs) + deploy.yml (Docker Hub → ECS)
+│   └── Dockerfile                            # arm64 multi-stage: Vite build → runtime
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_ALB_Auto_Scaling.md
 │   ├── 2_NLB_Auto_Scaling.md
@@ -833,7 +894,8 @@ AWS Project/                                    # Root portfolio directory
 │   ├── 12_Server_Room_Inspection_Dashboard.md
 │   ├── 13_Systems_Manager_Automated_Patching.md
 │   ├── 14_GitHub_Actions_ECS_Deployment.md
-│   └── 15_Laravel_Ticketing_EKS.md
+│   ├── 15_Laravel_Ticketing_EKS.md
+│   └── 16_Icebreaker_Poll_Game.md
 │
 ├── .github/
 │   └── workflows/                            # CI/CD pipelines
@@ -877,16 +939,17 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Systems Manager Automated Patching* | ~$24/month | EC2 (2 × t3.micro) + public IPv4 | SSM/Maintenance Windows free; stop instances between windows; $0 while destroyed |
 | GitHub Actions ECS Deployment* | ~$67/month | NAT Gateway + ALB + Fargate | Public-subnet tasks or VPC endpoints drop NAT; $0 while destroyed |
 | Laravel Ticketing on EKS* | ~$74-304/month | EKS control plane + VPC endpoints + NAT + RDS + Redis | Teardown nights/weekends (~$74); `enable_interface_endpoints=false` (−$76); $0 while destroyed |
+| Icebreaker Poll Game | ~$92/month 24/7; ~$10/event | Fargate 2 × (1 vCPU / 2 GB) ARM ~$72 + ALB ~$18 | No NAT Gateway by design; scale the ECS service to zero between events; `teardown.sh` → $0 |
 
 > *Authored & `terraform validate`-clean; not currently deployed, so it bills $0 today.
 
-**Total Estimated Cost:** ~$1,230-1,720/month if all 15 projects were deployed simultaneously (the 4 authored-but-not-deployed projects are $0 while destroyed; the EKS ticketing platform alone ranges ~$74/month on a teardown schedule to ~$304/month if left running 24/7; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
+**Total Estimated Cost:** ~$1,320-1,810/month if all 16 projects were deployed simultaneously (the 4 authored-but-not-deployed projects are $0 while destroyed; the EKS ticketing platform alone ranges ~$74/month on a teardown schedule to ~$304/month if left running 24/7; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
 
 ---
 
 ## 🧪 Testing & Validation
 
-**Total Test Coverage:** 91+ automated tests across all projects
+**Total Test Coverage:** 249+ automated tests across all projects
 
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
@@ -905,6 +968,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Systems Manager Automated Patching | ✅ `validate`-clean | — | — | ⏳ Live patch run pending deploy |
 | GitHub Actions ECS Deployment | ✅ `fmt` + `validate`-clean | — | — | ⏳ Live rolling deploy + ALB health pending deploy |
 | Laravel Ticketing on EKS | ✅ `validate` + `fmt` (7 modules + dev) | ✅ `helm lint` + `helm template` | ✅ `shellcheck` + `php -l` (60) + `bash -n` + `py_compile` | ⏳ Live cluster + pod smoke tests pending apply |
+| Icebreaker Poll Game | ✅ 139 unit tests (`node --test`) | ⚠️ 19-check smoke suite — 17 pass, 2 assert a superseded `tally: null` contract | ✅ 5-job CI (answer key, backend, frontend build, lint, image) | ✅ 300-player load test on the deployed stack |
 
 ---
 
@@ -938,13 +1002,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching | GH Actions ECS | Laravel EKS |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|----------------|-------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) | <100ms (ALB→Fargate, warm) | <100ms (ALB→pod, warm) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave | scales with tasks (2–6) | scales with pods (HPA + KEDA) |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) | 2–6 tasks (CPU autoscaled) | web HPA + worker KEDA (nodes 2–4) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min | 8-12 min | 15-20 min |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A | <2 min (rolling, 2-AZ) | <15 min (single-AZ RDS, dev) |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching | GH Actions ECS | Laravel EKS | Icebreaker Poll |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|----------------|-------------|-----------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) | <100ms (ALB→Fargate, warm) | <100ms (ALB→pod, warm) | <100ms (`/state`, sub-1KB eventually-consistent read) |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave | scales with tasks (2–6) | scales with pods (HPA + KEDA) | ~150 polls/s sustained + 300-vote burst per question |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) | 2–6 tasks (CPU autoscaled) | web HPA + worker KEDA (nodes 2–4) | 300–500 (load-tested at 300) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min | 8-12 min | 15-20 min | 10-15 min (+ ACM validation, done days ahead) |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A | <2 min (rolling, 2-AZ) | <15 min (single-AZ RDS, dev) | <1 min (2 tasks, 2 AZ; show-of-hands fallback) |
 
 ---
 
@@ -996,6 +1060,7 @@ These projects are provided as educational and portfolio materials.
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
 | **Current Branch** | `feat/laravel-ticketing-eks` |
 | **Latest PR** | PR #pending (Laravel Ticketing on EKS) |
+| **Icebreaker Poll Game** | Separate repo — [Aterpise-MY/Icebreaker-Poll-Game](https://github.com/Aterpise-MY/Icebreaker-Poll-Game) (latest: PR #48 on `master`) |
 
 ---
 
@@ -1009,8 +1074,8 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** July 24, 2026 — Project 15 (Laravel Ticketing Platform on Amazon EKS) added; authored and verified to the ceiling of static validation, pending deployment  
-**Status:** ✅ 11 projects deployed, tested, documented · 📝 4 authored & validated, pending deployment  
+**Last Updated:** August 17, 2026 — Project 16 (Icebreaker Poll Game — Human vs AI Live Audience Poll) added; deployed, load-tested at 300 concurrent players, and documented from `origin/master`  
+**Status:** ✅ 12 projects deployed, tested, documented · 📝 4 authored & validated, pending deployment  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
 🚀 **Happy Deploying!**
