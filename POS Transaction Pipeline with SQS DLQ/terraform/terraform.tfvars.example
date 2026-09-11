@@ -1,0 +1,89 @@
+###############################################################################
+# Example variable values for the MekarMart POS DLQ pipeline.
+#
+# Copy to terraform.tfvars and edit:
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored. Every value below is commented out; the
+# defaults in variables.tf already match the lab configuration in scenario §5,
+# so an empty terraform.tfvars deploys the reference stack.
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Placement and naming
+# ---------------------------------------------------------------------------
+
+# Region for the whole stack. A DLQ must live in the same account and region as
+# its source queue, so this is not a per-resource setting.
+# aws_region = "ap-southeast-1"
+
+# Prefix for every resource name. "pos" yields pos-transactions,
+# pos-loyalty-queue, pos-loyalty-dlq, pos-loyalty-fn, pos-ops-alerts,
+# pos-sns-delivery-dlq, pos-processed-transactions.
+# Change it to run a second, isolated copy of the stack alongside the first.
+# name_prefix = "pos"
+
+# ---------------------------------------------------------------------------
+# Alerting (R3 - notify within 5 minutes of the first DLQ message)
+# ---------------------------------------------------------------------------
+
+# Email subscribed to pos-ops-alerts. Leave empty ("") to create the topic
+# without a subscriber. AWS sends a confirmation email that MUST be clicked;
+# until then no alarm notification is delivered and the Phase 4 acceptance
+# check ("alarm email received within 5 minutes") will fail.
+# ops_alert_email = "brendon@example.com"
+
+# ---------------------------------------------------------------------------
+# Drill switches (Phase 4, §8)
+# ---------------------------------------------------------------------------
+
+# Simulate the 40-minute third-party loyalty platform outage. Set true, send 50
+# transactions, wait past the ~15-minute loyalty retry window, and watch them
+# land in pos-loyalty-dlq while inventory and e-invoice keep flowing.
+# Set back to false to represent "fix deployed" before running the redrive.
+# loyalty_api_down = false
+
+# Fraction of e-invoice submissions that simulate an HTTP 429 from the
+# rate-limited tax authority API. 0 = never, 0.3 = ~30% of submissions.
+# The e-invoice lane's 8 receives x 360 s = ~48-minute retry window is sized to
+# absorb this without reaching the DLQ; raise it above ~0.6 to force DLQ
+# arrivals.
+# einvoice_throttle_rate = 0
+
+# ---------------------------------------------------------------------------
+# Retention and throughput
+# ---------------------------------------------------------------------------
+
+# CloudWatch Logs retention for the three consumer log groups.
+# 14 days is enough for R5 traceability while a DLQ message is still alive.
+# log_retention_days = 14
+
+# Source queue retention. 345600 s = 4 days (§5).
+# source_retention_seconds = 345600
+
+# DLQ retention. 1209600 s = 14 days, the SQS maximum.
+# Keep this ABOVE source_retention_seconds. For Standard queues the expiry
+# clock runs from the original enqueue on the source queue and is not reset by
+# the move to the DLQ, so equal retentions silently shorten the DLQ window by
+# however long the message already waited.
+# dlq_retention_seconds = 1209600
+
+# Records per Lambda invocation. Keep at 10 so the Phase 3 partial-batch test
+# (9 good + 1 poison) fits in one batch.
+# batch_size = 10
+
+# TTL horizon written into the expires_at attribute of
+# pos-processed-transactions. Exposed as an output for the consumer code.
+# idempotency_ttl_days = 7
+
+# ---------------------------------------------------------------------------
+# Tagging
+# ---------------------------------------------------------------------------
+
+# Merged on top of the provider default_tags
+# (Project / Owner / Environment / ManagedBy) for every resource.
+# additional_tags = {
+#   CostCentre = "platform-eng"
+#   ChangeTicket = "CHG-2026-0914"
+# }

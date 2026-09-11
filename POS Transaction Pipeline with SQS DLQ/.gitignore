@@ -1,0 +1,31 @@
+# Terraform state and working directories
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# Variable files may carry account-specific values and alert email addresses
+*.tfvars
+!*.tfvars.example
+
+# Lambda build artefacts (built by Terraform's archive_file at plan time)
+*.zip
+.build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.DS_Store

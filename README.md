@@ -18,7 +18,7 @@ A collection of **production-grade cloud infrastructure projects** demonstrating
 
 ## 🎯 Project Overview
 
-This portfolio showcases **16 AWS infrastructure projects** — 12 deployed and tested, plus 4 (Server Room Inspection Dashboard, Systems Manager Automated Patching, GitHub Actions ECS Deployment, and Laravel Ticketing on EKS) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
+This portfolio showcases **17 AWS infrastructure projects** — 12 deployed and tested, plus 5 (Server Room Inspection Dashboard, Systems Manager Automated Patching, GitHub Actions ECS Deployment, Laravel Ticketing on EKS, and POS Transaction Pipeline with SQS DLQ) authored and `terraform validate`-clean, pending deployment — each demonstrating different architectural patterns, scaling strategies, and deployment approaches. All projects are:
 
 - ✅ **Production-Ready** — Security hardened, tested, documented
 - ✅ **Infrastructure as Code** — 100% Terraform/CloudFormation managed
@@ -49,6 +49,7 @@ This portfolio showcases **16 AWS infrastructure projects** — 12 deployed and 
 | [GitHub Actions ECS Deployment](#14-github-actions-cicd--aws-ecs-fargate) | CI/CD → ECS Fargate | Container continuous delivery, rolling deploys | 8-12 min | ~$67/month* |
 | [Laravel Ticketing on EKS](#15-laravel-ticketing-platform-on-amazon-eks) | EKS + RDS + Redis | Self-hosted help desk, Kubernetes platform | 15-20 min | ~$74-304/month* |
 | [Icebreaker Poll Game](#16-icebreaker-poll-game--human-vs-ai-live-audience-poll) | ECS Fargate + DynamoDB | Live audience polling, conference segments | 10-15 min | ~$92/month; ~$10/event |
+| [POS Transaction Pipeline with SQS DLQ](#17-pos-transaction-pipeline-with-sqs-dead-letter-queues) | SNS fan-out + SQS DLQ + Lambda | Zero-silent-loss messaging, replayable failures | 3-5 min | ~$0.70/month* |
 
 > *Authored and `terraform validate`-clean; not currently deployed ($0 while destroyed).
 
@@ -530,6 +531,41 @@ A live audience poll built for the 15-minute opening segment of a conference tal
 
 ---
 
+### 17. POS Transaction Pipeline with SQS Dead-Letter Queues
+
+**Location:** `./POS Transaction Pipeline with SQS DLQ/`
+
+**Description:**
+A retail POS transaction pipeline built around one requirement: **no transaction may silently disappear**. The target is MekarMart, a 180-store Malaysian/Singaporean convenience chain (~6,000 tx/hour, ~25,000 at Chinese New Year peak) whose previous system had no DLQ and no distinction between retryable and permanent failures — a 40-minute loyalty-API outage cost 3,140 transactions their points because a `try/except` swallowed the timeout and let SQS delete the message, and malformed messages from POS firmware v2.3 retried for four days before the retention period expired and deleted them unnoticed. Terraform provisions an SNS fan-out to three independent consumer lanes (loyalty, inventory, e-invoice), each with its own Standard SQS queue, Python 3.12 Lambda consumer, and dedicated dead-letter queue, plus a subscription-level DLQ that catches the SNS-layer delivery failures the per-consumer DLQs structurally cannot see. "Queue + DLQ + redrive + alarms + consumer" is packaged as one reusable Terraform module called three times with different parameters. Targets account `022499047467` in `ap-southeast-1` under the prefix `pos`, on AWS provider `v5.100.0`.
+
+**Architecture:** POS terminals → SNS `pos-transactions` (raw delivery) → 3 × SQS Standard queue → Lambda consumer (`ReportBatchItemFailures`) → DynamoDB idempotency claim; failures → per-lane DLQ → CloudWatch alarm → SNS `pos-ops-alerts` → `StartMessageMoveTask` redrive
+
+**Key Features:**
+- ✅ One reusable `consumer_queue` module (12 resources per lane) — a fourth downstream service is a ten-line module block, not a copy-paste of a dozen resources
+- ✅ Three sizing rules enforced, not just documented — `visibility_timeout >= 6 × lambda_timeout` via a `lifecycle { precondition }`, `max_receive_count >= 5` via variable validation, DLQ retention (14 d) > source retention (4 d) because Standard queues never reset the enqueue timestamp on a dead-letter move
+- ✅ Blast-radius isolation — a loyalty outage fills `pos-loyalty-dlq` only; inventory and e-invoice keep flowing on their own queues, consumers and DLQs
+- ✅ Partial batch responses (`ReportBatchItemFailures`) so 1 poison record in a batch of 10 does not drag the other 9 back through the retry loop
+- ✅ DynamoDB conditional-write idempotency with an explicit **claim/release** pair — `DeleteItem` releases the claim when the side effect fails, without which a retry would be misread as a duplicate and silently dropped
+- ✅ Subscription-level DLQ (`pos-sns-delivery-dlq`) + its own alarm — SQS DLQs catch *consumer* failures, not SNS *delivery* failures
+- ✅ Redrive allow policy pinned to `byQueue`, so loyalty failures can never be replayed into the inventory queue
+- ✅ Rate-limited replay (`scripts/redrive.sh`, 10 msg/s) so a recovered downstream is not knocked over a second time
+- ✅ S3 poison-message archive (versioned, SSE-S3, 90-day lifecycle) that no Lambda role can write to — archiving is a human operator action under their own credentials
+- ✅ Full on-call runbook: triage flow, Logs Insights traceability queries, Path A (transient → redrive) / Path B (poison → archive → purge) / Path C (SNS delivery DLQ), post-action verification, and 7 known traps
+- ✅ **23 offline unit tests** (no boto3, no credentials, no network) covering scenario test cases TC-01 to TC-05
+
+**Tech Stack:** Terraform (`aws v5.100.0`, `archive v2.8.0`), Amazon SNS (fan-out + subscription DLQ), Amazon SQS (Standard, redrive policy, redrive allow policy, `StartMessageMoveTask`), AWS Lambda (Python 3.12, event source mappings with partial batch responses), DynamoDB (conditional-write idempotency + TTL), S3, IAM, CloudWatch (7 alarms + dashboard), GitHub Actions + OIDC
+
+**Cost:** ~$0.70/month — effectively just the 7 CloudWatch alarms at ~$0.10 each; SQS, SNS, Lambda, DynamoDB on-demand and the dashboard stay in the Free Tier at lab volumes, and SSE-SQS avoids the ~$1/month-per-key cost of a customer-managed KMS key — $0 while destroyed
+
+**Status:** Authored & `terraform validate`-clean (`Plan: 48 to add`); not yet deployed. TC-06 (redrive), TC-07 (SNS delivery DLQ) and TC-08 (log traceability) pending a live deploy
+
+**Links:**
+- 📄 [Full Documentation](POS%20Transaction%20Pipeline%20with%20SQS%20DLQ/README.md)
+- 📖 [On-Call Runbook](POS%20Transaction%20Pipeline%20with%20SQS%20DLQ/docs/runbook-dlq.md)
+- 📝 [Resume Summary](Resume/17_POS_Transaction_Pipeline_SQS_DLQ.md)
+
+---
+
 ## 🛠 Technology Stack
 
 ### Infrastructure as Code
@@ -551,6 +587,7 @@ A live audience poll built for the 15-minute opening segment of a conference tal
 | **TLS / DNS** | ACM (DNS-validated certificates), Route53 hosted zones + alias records, ALB TLS 1.3 policy, HTTP→HTTPS 301 redirect |
 | **GraphQL** | AWS AppSync, VTL resolvers |
 | **Serverless** | Lambda, API Gateway, Cognito, SQS FIFO, SNS |
+| **Async messaging / DLQ** | SNS fan-out, SQS Standard + per-consumer DLQ, redrive policy / redrive allow policy (`byQueue`), `StartMessageMoveTask`, Lambda event source mapping partial batch responses (`ReportBatchItemFailures`), DynamoDB conditional-write idempotency |
 | **URL Shortener** | API Gateway (REST), Lambda (Python 3.11), DynamoDB TTL |
 | **Real-time / WebSocket** | API Gateway WebSocket (v2), Lambda, DynamoDB GSI fan-out |
 | **AI / NLP** | AWS Comprehend (DetectSentiment) — real-time ticket sentiment triage |
@@ -587,7 +624,7 @@ A live audience poll built for the 15-minute opening segment of a conference tal
 ✅ **Auto-Scaling** — Responsive to traffic spikes, cost-efficient  
 ✅ **Production-Ready** — Tested, documented, runbooks available  
 ✅ **Cost Analysis** — Detailed monthly cost breakdown for each project  
-✅ **Comprehensive Testing** — 288+ automated tests across all projects  
+✅ **Comprehensive Testing** — 311+ automated tests across all projects  
 ✅ **Load-Tested Under Real Contention** — a 300-concurrent-player run surfaced 537 DynamoDB `TransactionConflict` retries on one hot item, which drove a write-sharding redesign  
 ✅ **Clear Documentation** — READMEs, diagrams, FAQ, troubleshooting guides  
 
@@ -879,6 +916,29 @@ AWS Project/                                    # Root portfolio directory
 │   ├── .github/workflows/                    # ci.yml (5 jobs) + deploy.yml (Docker Hub → ECS)
 │   └── Dockerfile                            # arm64 multi-stage: Vite build → runtime
 │
+├── POS Transaction Pipeline with SQS DLQ/    # Project 17: SNS fan-out + per-consumer SQS DLQs
+│   ├── README.md                             # Full documentation (16 sections)
+│   ├── Enterprise_DLQ_Scenario_POS_EN.md     # Approved scenario (MekarMart, 180 stores)
+│   ├── terraform/
+│   │   ├── providers.tf                      # aws ~> 5.0 + archive ~> 2.4, ap-southeast-1, default_tags
+│   │   ├── variables.tf                      # 11 root inputs with validation
+│   │   ├── sns.tf                            # pos-transactions, pos-ops-alerts, pos-sns-delivery-dlq + alarm
+│   │   ├── dynamodb.tf                       # pos-processed-transactions (idempotency, 7-day TTL)
+│   │   ├── s3.tf                             # pos-dlq-archive-<account-id> (versioned, SSE-S3, 90d lifecycle)
+│   │   ├── consumers.tf                      # 3 module calls: loyalty, inventory, einvoice
+│   │   ├── cloudwatch.tf                     # pos-dlq-pipeline dashboard (4 widgets)
+│   │   ├── outputs.tf                        # 17 outputs incl. ready-to-paste redrive commands
+│   │   └── modules/consumer_queue/           # queue + DLQ + policies + Lambda + ESM + 2 alarms
+│   ├── lambda/
+│   │   ├── common/                           # errors.py, idempotency.py, processing.py
+│   │   ├── loyalty/ · inventory/ · einvoice/ # One handler per downstream service
+│   │   └── test_handlers.py                  # 23 offline unit tests (TC-01 to TC-05)
+│   ├── scripts/
+│   │   ├── pos_simulator.py                  # normal / poison / duplicate / mixed / burst traffic
+│   │   └── redrive.sh                        # StartMessageMoveTask wrapper, 10 msg/s, --dry-run
+│   ├── docs/runbook-dlq.md                   # On-call runbook: triage, Paths A/B/C, 7 known traps
+│   └── .github/workflows/terraform.yml       # validate → tests → plan (PR) → apply (main, OIDC)
+│
 ├── Resume/                                   # Portfolio summaries (git-ignored)
 │   ├── 1_ALB_Auto_Scaling.md
 │   ├── 2_NLB_Auto_Scaling.md
@@ -895,7 +955,8 @@ AWS Project/                                    # Root portfolio directory
 │   ├── 13_Systems_Manager_Automated_Patching.md
 │   ├── 14_GitHub_Actions_ECS_Deployment.md
 │   ├── 15_Laravel_Ticketing_EKS.md
-│   └── 16_Icebreaker_Poll_Game.md
+│   ├── 16_Icebreaker_Poll_Game.md
+│   └── 17_POS_Transaction_Pipeline_SQS_DLQ.md
 │
 ├── .github/
 │   └── workflows/                            # CI/CD pipelines
@@ -940,16 +1001,17 @@ All projects follow **AWS Well-Architected Framework** principles:
 | GitHub Actions ECS Deployment* | ~$67/month | NAT Gateway + ALB + Fargate | Public-subnet tasks or VPC endpoints drop NAT; $0 while destroyed |
 | Laravel Ticketing on EKS* | ~$74-304/month | EKS control plane + VPC endpoints + NAT + RDS + Redis | Teardown nights/weekends (~$74); `enable_interface_endpoints=false` (−$76); $0 while destroyed |
 | Icebreaker Poll Game | ~$92/month 24/7; ~$10/event | Fargate 2 × (1 vCPU / 2 GB) ARM ~$72 + ALB ~$18 | No NAT Gateway by design; scale the ECS service to zero between events; `teardown.sh` → $0 |
+| POS Transaction Pipeline with SQS DLQ* | ~$0.70/month | 7 CloudWatch alarms (~$0.10 each) — everything else Free Tier at lab volume | SSE-SQS instead of a customer-managed KMS key (−~$1/key); on-demand DynamoDB + Lambda cost nothing idle; $0 while destroyed |
 
 > *Authored & `terraform validate`-clean; not currently deployed, so it bills $0 today.
 
-**Total Estimated Cost:** ~$1,320-1,810/month if all 16 projects were deployed simultaneously (the 4 authored-but-not-deployed projects are $0 while destroyed; the EKS ticketing platform alone ranges ~$74/month on a teardown schedule to ~$304/month if left running 24/7; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
+**Total Estimated Cost:** ~$1,320-1,810/month if all 17 projects were deployed simultaneously (the 5 authored-but-not-deployed projects are $0 while destroyed; the EKS ticketing platform alone ranges ~$74/month on a teardown schedule to ~$304/month if left running 24/7; Event Ticket is <$1/event; AppSync ~$5/month; URL Shortener ~$1/month; Real-time Polling ~$5/event; Zendesk Triage ~$4/month)
 
 ---
 
 ## 🧪 Testing & Validation
 
-**Total Test Coverage:** 249+ automated tests across all projects
+**Total Test Coverage:** 272+ automated tests across all projects
 
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
@@ -969,6 +1031,7 @@ All projects follow **AWS Well-Architected Framework** principles:
 | GitHub Actions ECS Deployment | ✅ `fmt` + `validate`-clean | — | — | ⏳ Live rolling deploy + ALB health pending deploy |
 | Laravel Ticketing on EKS | ✅ `validate` + `fmt` (7 modules + dev) | ✅ `helm lint` + `helm template` | ✅ `shellcheck` + `php -l` (60) + `bash -n` + `py_compile` | ⏳ Live cluster + pod smoke tests pending apply |
 | Icebreaker Poll Game | ✅ 139 unit tests (`node --test`) | ⚠️ 19-check smoke suite — 17 pass, 2 assert a superseded `tally: null` contract | ✅ 5-job CI (answer key, backend, frontend build, lint, image) | ✅ 300-player load test on the deployed stack |
+| POS Transaction Pipeline with SQS DLQ | ✅ `fmt` + `validate`-clean (`Plan: 48 to add`) | ✅ 23 offline unit tests (`python3 -m unittest discover lambda`) | ✅ TC-01 to TC-05 covered offline (poison, partial batch, idempotency, outage drill) | ⏳ Live DLQ drill, redrive (TC-06), SNS delivery DLQ (TC-07) and Logs Insights traceability (TC-08) pending deploy |
 
 ---
 
@@ -1002,13 +1065,13 @@ Working through these projects demonstrates expertise in:
 
 ## 📈 Performance Benchmarks
 
-| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching | GH Actions ECS | Laravel EKS | Icebreaker Poll |
-|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|----------------|-------------|-----------------|
-| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) | <100ms (ALB→Fargate, warm) | <100ms (ALB→pod, warm) | <100ms (`/state`, sub-1KB eventually-consistent read) |
-| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave | scales with tasks (2–6) | scales with pods (HPA + KEDA) | ~150 polls/s sustained + 300-vote burst per question |
-| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) | 2–6 tasks (CPU autoscaled) | web HPA + worker KEDA (nodes 2–4) | 300–500 (load-tested at 300) |
-| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min | 8-12 min | 15-20 min | 10-15 min (+ ACM validation, done days ahead) |
-| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A | <2 min (rolling, 2-AZ) | <15 min (single-AZ RDS, dev) | <1 min (2 tasks, 2 AZ; show-of-hands fallback) |
+| Metric | NLB | ALB | SaaS | Multi-Tier | Tibot | App Runner | Event Ticket | AppSync | URL Shortener | Real-time Polling | Zendesk Triage | Server Room | SSM Patching | GH Actions ECS | Laravel EKS | Icebreaker Poll | POS DLQ Pipeline |
+|--------|-----|-----|------|-----------|-------|------------|--------------|---------|---------------|-------------------|----------------|-------------|--------------|----------------|-------------|-----------------|-----------------|
+| Latency | <100µs | <200ms | <200ms | <300ms | Variable | <100ms | <60 s (e2e ticket) | <10ms (resolver) | <50ms (warm) | <100ms (fan-out) | <500ms (Comprehend + write-back) | <100ms (ALB→Fargate, warm) | N/A (scheduled batch) | <100ms (ALB→Fargate, warm) | <100ms (ALB→pod, warm) | <100ms (`/state`, sub-1KB eventually-consistent read) | n/a — not deployed; design target is a ~15 min loyalty retry window before DLQ, alarm within ~60 s |
+| Throughput | 1M+ RPS | 100K RPS | 50K RPS | 10K RPS | On-demand | 25K RPS | 500+/event | 300K RPS (default limit) | 10K RPS (API GW default) | 500k+ msgs/event | 20 TPS (Comprehend default) | ~1 LCU (single task) | 25% fleet/wave | scales with tasks (2–6) | scales with pods (HPA + KEDA) | ~150 polls/s sustained + 300-vote burst per question | ~6,000 tx/hour baseline, ~25,000 at peak (each fanned out to 3 queues) |
+| Concurrent Users | 10,000+ | 5,000+ | 1,000+ | 500+ | Variable | 400+ | N/A (event-triggered) | Unlimited (managed) | 1,000 (Lambda concurrency) | 100k+ connections | N/A (webhook-triggered) | 1 task (scalable) | N/A (fleet patch) | 2–6 tasks (CPU autoscaled) | web HPA + worker KEDA (nodes 2–4) | 300–500 (load-tested at 300) | N/A (message-driven; 3 Lambda consumers, batch size 10) |
+| Deployment Time | 12-18 min | 12-18 min | 10-15 min | 15-20 min | Variable | 8-12 min | 8-12 min | 2-3 min | 2-3 min | 3-4 min | 2-3 min | 15-20 min | 10-15 min | 8-12 min | 15-20 min | 10-15 min (+ ACM validation, done days ahead) | 3-5 min (48 resources, no VPC/ALB/RDS to wait on) |
+| RTO | <2 min | <2 min | <2 min | <2 min | <1 min | <2 min | <1 min | <1 min | <1 min | <1 min | <1 min | <15 min (single-AZ RDS) | N/A | <2 min (rolling, 2-AZ) | <15 min (single-AZ RDS, dev) | <1 min (2 tasks, 2 AZ; show-of-hands fallback) | <5 min to alert; replay bounded by the 14-day DLQ retention |
 
 ---
 
@@ -1058,8 +1121,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/laravel-ticketing-eks` |
-| **Latest PR** | PR #pending (Laravel Ticketing on EKS) |
+| **Current Branch** | `feat/pos-dlq-pipeline` |
+| **Latest PR** | PR #pending (POS Transaction Pipeline with SQS DLQ) |
 | **Icebreaker Poll Game** | Separate repo — [Aterpise-MY/Icebreaker-Poll-Game](https://github.com/Aterpise-MY/Icebreaker-Poll-Game) (latest: PR #48 on `master`) |
 
 ---
@@ -1074,8 +1137,8 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** August 17, 2026 — Project 16 (Icebreaker Poll Game — Human vs AI Live Audience Poll) added; deployed, load-tested at 300 concurrent players, and documented from `origin/master`  
-**Status:** ✅ 12 projects deployed, tested, documented · 📝 4 authored & validated, pending deployment  
+**Last Updated:** September 11, 2026 — Project 17 (POS Transaction Pipeline with SQS DLQ) added; SNS fan-out to three isolated consumer lanes with per-consumer dead-letter queues, idempotent redrive, and a full on-call runbook — authored, `terraform validate`-clean (`Plan: 48 to add`), 23 offline unit tests passing, not yet deployed  
+**Status:** ✅ 12 projects deployed, tested, documented · 📝 5 authored & validated, pending deployment  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 
 🚀 **Happy Deploying!**
