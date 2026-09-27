@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars. No secrets here: tokens go into Secrets Manager with the AWS CLI.
+
+aws_region         = "ap-southeast-1"
+environment        = "prod"
+ebteqdesk_base_url = "https://ebteqdesk.example.com"
+
+# Weekday office hours, Asia/Kuala_Lumpur. Warni stays DISABLED until its rollout checklist is done.
+portals = {
+  salonv3 = { schedule_expression = "cron(0 9-17 ? * MON-FRI *)", enabled = true, expected_runs_per_day = 9 }
+  warni   = { schedule_expression = "cron(30 9-16 ? * MON-FRI *)", enabled = false, expected_runs_per_day = 8 }
+}
+
+# Retry model: 600 s timeout, 900 s visibility (default = timeout + 300), 2 deliveries.
+# lambda_timeout_seconds = 600
+# max_receive_count      = 2
+
+# Final-failure Telegram on the 1st consecutive failure, then every 3rd.
+# alert_every_n_failures = 3
+
+# First day only, to confirm Telegram works.
+# telegram_notify_on_success = true
