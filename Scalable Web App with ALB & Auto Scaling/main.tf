@@ -1,9 +1,6 @@
 # =============================================================================
 # Scalable Web App with ALB & Auto Scaling
 #
-# Status of the HTTPS and RDS revision (2026-10-07): authored and
-# validate-clean, not deployed.
-#
 # Cross-variable validation rules in variables.tf need Terraform 1.9 or later.
 # =============================================================================
 
