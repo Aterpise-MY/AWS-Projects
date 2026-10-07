@@ -32,5 +32,3 @@ override.tf.json
 
 # macOS
 .DS_Store
-variables.tf
-variables.tf

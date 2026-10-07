@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.0"
+    }
   }
 
   # Uncomment the block below before team use to enable remote state.
@@ -35,3 +39,8 @@ provider "aws" {
     }
   }
 }
+
+# The Cloudflare API token is read only from the CLOUDFLARE_API_TOKEN
+# environment variable. It is never a Terraform variable and never in tfvars.
+# The token needs Zone / DNS / Edit on the zone that holds var.domain_name.
+provider "cloudflare" {}

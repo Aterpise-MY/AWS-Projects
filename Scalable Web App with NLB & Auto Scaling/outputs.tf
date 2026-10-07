@@ -1,6 +1,31 @@
+output "https_url" {
+  description = "HTTPS URL of the application. This is the address to use: the certificate is issued for this hostname, and port 80 is closed."
+  value       = "https://${var.domain_name}"
+}
+
 output "nlb_dns_name" {
-  description = "Public DNS name of the Network Load Balancer. Use this to access the application: http://<nlb_dns_name>"
+  description = "Public DNS name of the Network Load Balancer, the target of the Cloudflare CNAME for domain_name. Browse to https_url instead: the certificate does not cover this name, and there is no port 80 listener."
   value       = aws_lb.web.dns_name
+}
+
+output "certificate_arn" {
+  description = "ARN of the ACM certificate on the NLB TLS:443 listener."
+  value       = aws_acm_certificate.web.arn
+}
+
+output "db_endpoint" {
+  description = "Connection endpoint of the RDS PostgreSQL instance, as address:port. Reachable only from the EC2 security group."
+  value       = aws_db_instance.main.endpoint
+}
+
+output "db_secret_arn" {
+  description = "ARN of the Secrets Manager secret that holds the RDS-managed master credential. The ARN only; the secret value is never an output."
+  value       = aws_db_instance.main.master_user_secret[0].secret_arn
+}
+
+output "db_instance_identifier" {
+  description = "Identifier of the RDS DB instance."
+  value       = aws_db_instance.main.identifier
 }
 
 output "nlb_arn" {
@@ -38,9 +63,19 @@ output "private_subnet_ids" {
   value       = module.vpc.private_subnets
 }
 
+output "database_subnet_ids" {
+  description = "IDs of the database subnets (RDS placement)."
+  value       = module.vpc.database_subnets
+}
+
 output "ec2_security_group_id" {
   description = "ID of the security group attached to EC2 instances."
   value       = aws_security_group.ec2.id
+}
+
+output "db_security_group_id" {
+  description = "ID of the security group attached to the RDS instance."
+  value       = aws_security_group.db.id
 }
 
 output "iam_role_arn" {
