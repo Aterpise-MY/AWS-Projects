@@ -35,8 +35,8 @@ This portfolio showcases **15 AWS infrastructure projects** — 11 deployed and 
 |---------|------|----------|-----------------|-------------------|
 | [Multi-Tenant SaaS Application](#1-multi-tenant-saas-application) | Serverless | Multi-tenant apps, APIs | 10-15 min | $165 |
 | [Multi-Tier Web App](#2-multi-tier-web-app-deployment) | EC2 + RDS | Enterprise web apps | 15-20 min | $280 |
-| [Scalable Web App (ALB)](#3-scalable-web-app-with-alb--auto-scaling) | ALB + ASG | Layer 7 routing | 12-18 min | $220 |
-| [Scalable Web App (NLB)](#4-scalable-web-app-with-nlb--auto-scaling) | NLB + ASG | High-performance APIs | 12-18 min | $195 |
+| [Scalable Web App (ALB)](#3-scalable-web-app-with-alb--auto-scaling) | ALB + ASG | Layer 7 routing | 12-18 min | $123.25 (HTTPS + RDS revision, not deployed) |
+| [Scalable Web App (NLB)](#4-scalable-web-app-with-nlb--auto-scaling) | NLB + ASG | High-performance APIs | 12-18 min | $196.25 (HTTPS + RDS revision, not deployed) |
 | [Cloud-Tibot](#5-cloud-tibot) | Microservices | Bot platforms, agents | Variable | Variable |
 | [AWS App Runner Deployment](#6-aws-app-runner-deployment) | Container | Containerised web apps | 8-12 min | $16-26 |
 | [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
@@ -115,9 +115,9 @@ A classic three-tier web application architecture with web servers, application 
 **Location:** `./Scalable Web App with ALB & Auto Scaling/`  
 
 **Description:**  
-A highly scalable web application using an Application Load Balancer (ALB) with Layer 7 routing capabilities. Ideal for microservices and content-based routing patterns.
+A scalable web tier behind an internet-facing Application Load Balancer (ALB), revised on 2026-10-07 to serve traffic over HTTPS and to add a Multi-AZ RDS for PostgreSQL 18 database tier (one primary plus a synchronous standby). The revised Terraform puts an `HTTPS:443` listener on the ALB for `webapp-alb.aterpise.com`, with an ACM certificate validated through Terraform-managed Cloudflare DNS records, and makes `HTTP:80` answer with a `301` redirect to HTTPS. Apache instances on Amazon Linux 2023 in an Auto Scaling Group run a boot-time connectivity check against the database and show `connected` or `unreachable` on a static page. The previous architecture (HTTP only, no database tier) was deployed in June 2026; the HTTPS and RDS revision is authored and validate-clean, not deployed.
 
-**Architecture:** ALB (Layer 7) → ASG (EC2) → CloudWatch Metrics → Scaling Policies
+**Architecture:** Cloudflare DNS (CNAME, DNS only) → ALB (HTTPS:443 with ACM certificate; HTTP:80 → 301 to HTTPS) → ASG (EC2, HTTP:80) → RDS PostgreSQL Multi-AZ (boot-time connectivity check, TCP 5432); CloudWatch CPU alarms → Scaling Policies
 
 **Key Features:**
 - ✅ Layer 7 (Application) routing rules
@@ -126,10 +126,16 @@ A highly scalable web application using an Application Load Balancer (ALB) with 
 - ✅ Multi-AZ deployment
 - ✅ CloudWatch Logs and Alarms
 - ✅ Dead-band scaling to prevent thrashing
+- `HTTPS:443` listener with a DNS-validated ACM certificate and the TLS policy set by `ssl_policy` (default `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`); `HTTP:80` answers `HTTP_301` to HTTPS
+- Multi-AZ RDS for PostgreSQL 18 (`db.t3.micro`, 20 GB gp3, encrypted, not publicly accessible) in two new database subnets that share one route table holding the local route only
+- RDS-managed master password in Secrets Manager; there is no password variable and nothing in tfvars or user data
+- Three security groups (`<app_name>-alb-sg`, `<app_name>-ec2-sg`, `<app_name>-db-sg`): 80 and 443 from the internet reach the ALB only, 80 reaches the instances from the ALB group only, 5432 reaches the database from the instance group only
+- Port 22 removed in favour of Session Manager; IMDSv2 required (hop limit 1); new instance role limited to `AmazonSSMManagedInstanceCore` plus `secretsmanager:GetSecretValue` on the one database secret
+- Cloudflare DNS records managed by Terraform (ACM validation CNAME and hostname CNAME, both DNS only); the API token is read from `CLOUDFLARE_API_TOKEN` and is never in a file
 
-**Tech Stack:** Terraform, ALB, Auto Scaling Groups, CloudWatch, EC2
+**Tech Stack:** Terraform, ALB, Auto Scaling Groups, CloudWatch, EC2, RDS PostgreSQL (Multi-AZ), ACM, Secrets Manager, IAM, Systems Manager Session Manager, Cloudflare DNS
 
-**Cost:** ~$220/month (production sizing)
+**Cost:** $123.25/month for the HTTPS and RDS revision, up $31.28 from $91.97 for the previous architecture. Basis: AWS Price List API, us-east-1, on-demand, 730 hours per month, idle baseline, queried 2026-10-07; usage-based charges (LCU, NAT data processing, data transfer) are excluded.
 
 **Links:**
 - 📄 [Full Documentation](Scalable%20Web%20App%20with%20ALB%20%26%20Auto%20Scaling/README.md)
@@ -141,9 +147,9 @@ A highly scalable web application using an Application Load Balancer (ALB) with 
 **Location:** `./Scalable Web App with NLB & Auto Scaling/`  
 
 **Description:**  
-An ultra-high-performance web application using a Network Load Balancer (NLB) with extreme throughput and ultra-low latency capabilities. Perfect for real-time APIs and high-frequency trading platforms.
+A web tier in private subnets behind an internet-facing Network Load Balancer (NLB), revised on 2026-10-07 to serve traffic over HTTPS and to add a Multi-AZ RDS for PostgreSQL 18 database tier (one primary plus a synchronous standby). The revised Terraform gives the NLB a single `TLS:443` listener for `webapp-nlb.aterpise.com`, with an ACM certificate validated through Terraform-managed Cloudflare DNS records; port 80 is closed (no listener and no security group rule), because an NLB can forward but cannot redirect. Nginx or Apache instances on Amazon Linux 2023 in an Auto Scaling Group run a boot-time connectivity check against the database and show `connected` or `unreachable` on a static page. The previous architecture (HTTP only, no database tier) was deployed in June 2026; the HTTPS and RDS revision is authored and validate-clean, not deployed.
 
-**Architecture:** NLB (Layer 4) → ASG (EC2) → CloudWatch Metrics → Scaling Policies
+**Architecture:** Cloudflare DNS (CNAME, DNS only) → NLB (TLS:443 with ACM certificate; port 80 closed) → ASG (EC2 in private subnets, TCP 80) → RDS PostgreSQL Multi-AZ (boot-time connectivity check, TCP 5432); CloudWatch CPU alarms → Scaling Policies
 
 **Key Features:**
 - ✅ Layer 4 (Transport) routing for extreme performance
@@ -152,10 +158,17 @@ An ultra-high-performance web application using a Network Load Balancer (NLB) wi
 - ✅ Sticky sessions and connection draining
 - ✅ Multi-AZ deployment
 - ✅ Auto Scaling with predictive metrics
+- Single `TLS:443` listener with a DNS-validated ACM certificate and the TLS policy set by `ssl_policy` (default `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`); TLS ends at the NLB
+- Port 80 closed (no listener, no security group rule), so `http://` requests fail to connect and are not redirected
+- Multi-AZ RDS for PostgreSQL 18 (`db.t3.micro`, 20 GB gp3, encrypted, not publicly accessible) in database subnets `10.0.5.0/24` and `10.0.6.0/24`, each with its own route table holding the local route only
+- RDS-managed master password in Secrets Manager; there is no password variable, and the instance role gains `secretsmanager:GetSecretValue` on that one secret
+- Database security group with one ingress rule (TCP 5432 from the EC2 security group, by reference) and no egress rule
+- Amazon Linux 2023 AMI resolved from a public SSM parameter by default; `ami_id` is an optional override
+- Cloudflare DNS records managed by Terraform (ACM validation CNAME and hostname CNAME, both DNS only); the API token is read from `CLOUDFLARE_API_TOKEN` and is never in a file
 
-**Tech Stack:** Terraform, NLB, Auto Scaling Groups, CloudWatch, EC2
+**Tech Stack:** Terraform, NLB, Auto Scaling Groups, CloudWatch, EC2, RDS PostgreSQL (Multi-AZ), ACM, Secrets Manager, Cloudflare DNS
 
-**Cost:** ~$195/month (production sizing)
+**Cost:** $196.25/month for the HTTPS and RDS revision, up $31.28 from $164.97 for the previous architecture. Basis: AWS Price List API, us-east-1, on-demand, 730 hours per month, idle baseline, queried 2026-10-07; usage-based charges (LCU, NAT data processing, data transfer) are excluded.
 
 **Performance:** Sub-millisecond latency, 1M+ RPS capacity
 
@@ -512,6 +525,7 @@ A self-hostable help-desk platform — a Laravel application split into four Kub
 | **Kubernetes** | Amazon EKS 1.36 (arm64 / Graviton), managed node groups (ON_DEMAND + Spot), OIDC provider, EKS access entries, IRSA |
 | **Container** | App Runner, Amazon ECR, Docker (multi-stage, buildx) |
 | **Load Balancing** | ALB, NLB, API Gateway |
+| **TLS / DNS** | AWS Certificate Manager (DNS-validated public certificates), Cloudflare DNS (CNAME records managed by Terraform) |
 | **Databases** | RDS PostgreSQL, DynamoDB, ElastiCache |
 | **Networking** | VPC, Subnets, Security Groups, NAT Gateway, Route Tables |
 | **GraphQL** | AWS AppSync, VTL resolvers |
@@ -655,14 +669,32 @@ AWS Project/                                    # Root portfolio directory
 │   └── test-*.sh
 │
 ├── Scalable Web App with ALB & Auto Scaling/ # Project 3: ALB Architecture
-│   ├── README.md
-│   ├── terraform/
-│   └── test-*.sh
+│   ├── README.md                             # Full documentation
+│   ├── Result.md                             # Deployment result from June 2026 (previous architecture)
+│   ├── main.tf                               # Providers, DB subnets, security groups, IAM, ACM + Cloudflare DNS, RDS, ALB, ASG, alarms
+│   ├── variables.tf                          # Input variables with validation
+│   ├── outputs.tf                            # HTTPS URL, ALB, certificate, security group and RDS outputs
+│   ├── terraform.tfvars.example              # Configuration template (placeholder IDs)
+│   ├── .gitignore                            # Excludes state, .terraform/, *.tfvars
+│   ├── Automation/
+│   │   ├── check-alb.sh                      # Check script, to run after a deploy
+│   │   ├── deploy.sh                         # Legacy reference: pre-change architecture (HTTP only, no database)
+│   │   └── .gitignore                        # Excludes generated reports and outputs
+│   └── screenshots/                          # Screenshots from the June 2026 deployment
 │
 ├── Scalable Web App with NLB & Auto Scaling/ # Project 4: NLB Architecture
-│   ├── README.md
-│   ├── terraform/
-│   └── test-*.sh
+│   ├── README.md                             # Full documentation
+│   ├── Result.md                             # Deployment result from June 2026 (previous architecture)
+│   ├── provider.tf                           # Terraform, AWS, random and Cloudflare provider constraints
+│   ├── main.tf                               # VPC module, security groups, RDS, IAM, launch template, NLB, ACM + Cloudflare DNS, ASG, alarms, WAFv2
+│   ├── variables.tf                          # Input variables with validation
+│   ├── outputs.tf                            # HTTPS URL, NLB, certificate, RDS, network and IAM outputs
+│   ├── prod.tfvars.example                   # Configuration template (placeholder values)
+│   ├── Automation/
+│   │   ├── health_check.sh                   # Check script, to run after a deploy
+│   │   ├── deploy.sh                         # Legacy reference: pre-change architecture (HTTP only, no database)
+│   │   └── .gitignore                        # Excludes generated reports and outputs
+│   └── screenshots/                          # Screenshots from the June 2026 deployment
 │
 ├── Cloud-Tibot/                              # Project 5: Microservices
 │   ├── README.md
@@ -864,8 +896,8 @@ All projects follow **AWS Well-Architected Framework** principles:
 |---------|-------------|-----------------|---------------|
 | Multi-Tenant SaaS | ~$165 | RDS (84%) | Lambda reserved capacity, RDS auto-scaling |
 | Multi-Tier Web App | ~$280 | EC2 (70%) | Spot instances, reserved capacity |
-| Scalable Web App (ALB) | ~$220 | EC2 + ALB (75%) | Scheduled scaling, spot instances |
-| Scalable Web App (NLB) | ~$195 | EC2 + NLB (70%) | Auto-scaling, scheduled downtime |
+| Scalable Web App (ALB) | $123.25 (idle baseline; HTTPS + RDS revision, not deployed) | EC2 2 × `t3.medium` ($60.74) + RDS Multi-AZ ($26.28) | Scheduled scaling, spot instances |
+| Scalable Web App (NLB) | $196.25 (idle baseline; HTTPS + RDS revision, not deployed) | NAT gateways × 2 ($65.70) + EC2 2 × `t3.medium` ($60.74) | Auto-scaling, scheduled downtime |
 | Cloud-Tibot | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
 | App Runner Deployment | ~$16-26 | App Runner compute | Set min instances to 0 for idle cost reduction |
 | Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
@@ -994,8 +1026,8 @@ These projects are provided as educational and portfolio materials.
 | Resource | Link |
 |----------|------|
 | **GitHub Repository** | [AWS-Projects](https://github.com/Aterpise-MY/AWS-Projects) |
-| **Current Branch** | `feat/laravel-ticketing-eks` |
-| **Latest PR** | PR #pending (Laravel Ticketing on EKS) |
+| **Current Branch** | `feat/https-rds-alb-nlb` |
+| **Latest PR** | PR #pending (HTTPS and Multi-AZ RDS tier for the ALB and NLB web apps) |
 
 ---
 
@@ -1009,7 +1041,7 @@ These projects are provided as educational and portfolio materials.
 
 ---
 
-**Last Updated:** July 24, 2026 — Project 15 (Laravel Ticketing Platform on Amazon EKS) added; authored and verified to the ceiling of static validation, pending deployment  
+**Last Updated:** October 7, 2026 — Projects 3 and 4 (Scalable Web App with ALB / NLB & Auto Scaling) revised for HTTPS and a Multi-AZ RDS for PostgreSQL tier; the revision is authored and validate-clean, not deployed  
 **Status:** ✅ 11 projects deployed, tested, documented · 📝 4 authored & validated, pending deployment  
 **Total Time Invested:** 40+ hours of design, implementation, testing, and documentation  
 

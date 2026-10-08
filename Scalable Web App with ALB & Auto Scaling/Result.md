@@ -1,5 +1,7 @@
 # Deployment Result — Scalable Web App with ALB & Auto Scaling
 
+> **Note (2026-10-07):** This file records the June 2026 deployment of the previous architecture (HTTP only, no database tier). The HTTPS and RDS revision of 2026-10-07 is authored and validate-clean, not deployed. `/audit` regenerates this file after the next deploy.
+
 **Date:** 2026-06-08
 **Region:** us-east-1
 **Environment:** production
