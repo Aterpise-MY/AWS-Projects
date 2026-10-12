@@ -3,10 +3,21 @@
 #
 # Usage:
 #   ./health_check.sh [--project-name NAME] [--environment ENV] [--region REGION]
+#                     [--domain-name HOSTNAME]
 #
-# When run from the project directory, it reads terraform output -json first and
-# uses the real deployed ARNs/IDs. Falls back to naming-pattern lookups if
-# terraform is unavailable or state does not exist.
+# The Terraform files (prod.tfvars, state) are in the project root, one level
+# above this Automation/ folder. The script reads terraform output -json from
+# there first and uses the ARNs/IDs in the state. Falls back to naming-pattern
+# lookups if terraform is unavailable or state does not exist.
+#
+# The HTTPS checks need the hostname the certificate is issued for
+# (var.domain_name). It cannot be derived from a naming pattern, so it is taken
+# from --domain-name, else the https_url output, else domain_name in
+# prod.tfvars. Without it the HTTPS and page checks are skipped with a warning.
+#
+# Every AWS call is read-only (describe / list / get). The HTTPS request checks
+# the certificate: curl runs without -k and with -q, so a ~/.curlrc cannot turn
+# the certificate check off.
 #
 # Requires: aws CLI v2, jq, curl
 # Optional: terraform (for direct output binding)
@@ -37,16 +48,22 @@ WARN_COUNT=0
 # Parse defaults from prod.tfvars
 ###############################################################################
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TFVARS="${SCRIPT_DIR}/prod.tfvars"
+# The Terraform files are in the project root, one level above Automation/.
+# If this script is copied next to main.tf, its own directory is used instead.
+PROJECT_DIR="${SCRIPT_DIR}"
+[[ -f "${SCRIPT_DIR}/main.tf" ]] || PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TFVARS="${PROJECT_DIR}/prod.tfvars"
 
 tfvar() {
   local key="$1" default="${2:-}"
   if [[ -f "$TFVARS" ]]; then
     local val
-    # Strip everything up to and including =, then strip surrounding whitespace and quotes.
+    # Drop a trailing "# comment", strip everything up to and including =, then
+    # strip surrounding whitespace and quotes.
     # Uses [[:space:]] instead of \s for BSD sed compatibility on macOS.
     val=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$TFVARS" 2>/dev/null \
           | head -1 \
+          | sed 's/[[:space:]]*#.*$//' \
           | sed 's/.*=[[:space:]]*//' \
           | sed 's/^[[:space:]]*//' \
           | sed 's/[[:space:]]*$//' \
@@ -60,6 +77,7 @@ tfvar() {
 PROJECT_NAME=$(tfvar project_name "scalable-webapp")
 ENVIRONMENT=$(tfvar environment  "prod")
 REGION=$(tfvar region            "us-east-1")
+DOMAIN_NAME=""   # set by --domain-name; otherwise resolved after terraform outputs load
 
 ###############################################################################
 # CLI flag overrides
@@ -69,6 +87,7 @@ while [[ $# -gt 0 ]]; do
     --project-name) PROJECT_NAME="$2"; shift 2;;
     --environment)  ENVIRONMENT="$2";  shift 2;;
     --region)       REGION="$2";       shift 2;;
+    --domain-name)  DOMAIN_NAME="$2";  shift 2;;
     *) echo "Unknown flag: $1"; exit 1;;
   esac
 done
@@ -90,6 +109,10 @@ AWS="aws --region ${REGION} --output json"
 #   iam_role_arn        → TF_IAM_ROLE_ARN
 #   sns_topic_arn       → TF_SNS_ARN
 #   target_group_arn    → TF_TG_ARN
+#   https_url           → TF_HTTPS_URL       (https://<domain_name>)
+#   database_subnet_ids → TF_DB_SUBNETS      (JSON array)
+#   db_instance_identifier → TF_DB_ID
+#   db_security_group_id   → TF_DB_SG_ID
 ###############################################################################
 TF_NLB_DNS=""
 TF_NLB_ARN=""
@@ -103,10 +126,14 @@ TF_EC2_SG_ID=""
 TF_IAM_ROLE_ARN=""
 TF_SNS_ARN=""
 TF_TG_ARN=""
+TF_HTTPS_URL=""
+TF_DB_SUBNETS="[]"
+TF_DB_ID=""
+TF_DB_SG_ID=""
 TF_LOADED=false
 
-if command -v terraform &>/dev/null && [[ -f "${SCRIPT_DIR}/terraform.tfstate" || -f "${SCRIPT_DIR}/.terraform/terraform.tfstate" ]]; then
-  TF_OUT=$(cd "${SCRIPT_DIR}" && terraform output -json 2>/dev/null || echo "{}")
+if command -v terraform &>/dev/null && [[ -f "${PROJECT_DIR}/terraform.tfstate" || -f "${PROJECT_DIR}/.terraform/terraform.tfstate" ]]; then
+  TF_OUT=$(cd "${PROJECT_DIR}" && terraform output -json 2>/dev/null || echo "{}")
   if [[ "$TF_OUT" != "{}" && -n "$TF_OUT" ]]; then
     TF_NLB_DNS=$(echo        "$TF_OUT" | jq -r '.nlb_dns_name.value        // ""')
     TF_NLB_ARN=$(echo        "$TF_OUT" | jq -r '.nlb_arn.value             // ""')
@@ -120,6 +147,10 @@ if command -v terraform &>/dev/null && [[ -f "${SCRIPT_DIR}/terraform.tfstate" |
     TF_IAM_ROLE_ARN=$(echo   "$TF_OUT" | jq -r '.iam_role_arn.value        // ""')
     TF_SNS_ARN=$(echo        "$TF_OUT" | jq -r '.sns_topic_arn.value       // ""')
     TF_TG_ARN=$(echo         "$TF_OUT" | jq -r '.target_group_arn.value    // ""')
+    TF_HTTPS_URL=$(echo      "$TF_OUT" | jq -r '.https_url.value           // ""')
+    TF_DB_SUBNETS=$(echo     "$TF_OUT" | jq -c '.database_subnet_ids.value // []')
+    TF_DB_ID=$(echo          "$TF_OUT" | jq -r '.db_instance_identifier.value // ""')
+    TF_DB_SG_ID=$(echo       "$TF_OUT" | jq -r '.db_security_group_id.value // ""')
     TF_LOADED=true
   fi
 fi
@@ -129,6 +160,15 @@ NLB_NAME="${PROJECT_NAME}-${ENVIRONMENT}-nlb"
 ASG_NAME="${TF_ASG_NAME:-${PROJECT_NAME}-${ENVIRONMENT}-asg}"
 TG_NAME="${PROJECT_NAME}-${ENVIRONMENT}-tg"
 SNS_NAME="${PROJECT_NAME}-${ENVIRONMENT}-alarms"
+DB_ID="${TF_DB_ID:-${PROJECT_NAME}-${ENVIRONMENT}-db}"
+EC2_SG_NAME="${PROJECT_NAME}-${ENVIRONMENT}-ec2-sg"
+
+# Hostname for the HTTPS checks: --domain-name, else the https_url output, else
+# domain_name in prod.tfvars. Left empty if none is available.
+if [[ -z "$DOMAIN_NAME" ]]; then
+  DOMAIN_NAME="${TF_HTTPS_URL#https://}"
+  [[ -n "$DOMAIN_NAME" ]] || DOMAIN_NAME=$(tfvar domain_name "")
+fi
 
 # CloudWatch alarm prefix — all 5 alarms share this prefix (derived from convention)
 # Real alarm names (confirmed via AWS API):
@@ -148,6 +188,7 @@ echo -e "${BOLD}  Architecture Health Check${RESET}"
 echo -e "${BOLD}  Project : ${PROJECT_NAME}${RESET}"
 echo -e "${BOLD}  Env     : ${ENVIRONMENT}${RESET}"
 echo -e "${BOLD}  Region  : ${REGION}${RESET}"
+echo -e "${BOLD}  Host    : ${DOMAIN_NAME:-(not set)}${RESET}"
 echo -e "${BOLD}========================================${RESET}"
 
 ###############################################################################
@@ -232,6 +273,9 @@ fi
 
 ###############################################################################
 # 2. NLB Listeners
+# Expected: one listener only, TLS:443. Port 80 is closed: there is no port 80
+# listener and no port 80 rule on the NLB security group, because an NLB can
+# only forward, not redirect.
 ###############################################################################
 section "2. NLB Listeners"
 
@@ -242,9 +286,39 @@ if [[ -n "${NLB_ARN}" ]]; then
   if [[ "$LISTENER_COUNT" -eq 0 ]]; then
     fail "No listeners attached to NLB"
   else
-    echo "$LISTENERS_JSON" | jq -r '.Listeners[] | "\(.Protocol):\(.Port)"' | while read -r l; do
-      pass "Listener active: ${l}"
-    done
+    TLS_443_COUNT=$(echo "$LISTENERS_JSON" | jq '[.Listeners[] | select(.Protocol=="TLS" and .Port==443)] | length')
+    if [[ "$TLS_443_COUNT" -ge 1 ]]; then
+      pass "Listener present: TLS:443"
+      info "TLS policy: $(echo "$LISTENERS_JSON" | jq -r '[.Listeners[] | select(.Protocol=="TLS" and .Port==443) | .SslPolicy // "unknown"] | join(", ")')"
+    else
+      fail "TLS:443 listener not found"
+    fi
+
+    OTHER_LISTENERS=$(echo "$LISTENERS_JSON" | jq -r \
+      '[.Listeners[] | select((.Protocol=="TLS" and .Port==443) | not) | "\(.Protocol):\(.Port)"] | join(", ")')
+    if [[ -z "$OTHER_LISTENERS" ]]; then
+      pass "No other listeners — port 80 has no listener"
+    else
+      fail "Unexpected listener(s): ${OTHER_LISTENERS} (expected TLS:443 only)"
+    fi
+  fi
+
+  # The NLB security group must not allow port 80 either.
+  NLB_SG_CSV=$(echo "$NLB_JSON" | jq -r '.LoadBalancers[0].SecurityGroups // [] | join(",")')
+  if [[ -n "$NLB_SG_CSV" ]]; then
+    NLB_SG_JSON=$($AWS ec2 describe-security-groups \
+      --filters "Name=group-id,Values=${NLB_SG_CSV}" 2>/dev/null || echo '{"SecurityGroups":[]}')
+    NLB_SG_PORT80=$(echo "$NLB_SG_JSON" | jq \
+      '[.SecurityGroups[].IpPermissions[] | select(.IpProtocol=="-1" or (.IpProtocol=="tcp" and .FromPort<=80 and .ToPort>=80))] | length')
+    if [[ "$(echo "$NLB_SG_JSON" | jq '.SecurityGroups | length')" -eq 0 ]]; then
+      warn "NLB security group(s) ${NLB_SG_CSV} could not be read — port 80 rule not checked"
+    elif [[ "$NLB_SG_PORT80" -eq 0 ]]; then
+      pass "NLB security group has no ingress rule that covers port 80"
+    else
+      fail "NLB security group allows port 80 inbound (expected 443 only)"
+    fi
+  else
+    warn "NLB has no security group attached — port 80 rule not checked"
   fi
 else
   warn "Skipping listeners check — NLB ARN unavailable"
@@ -575,9 +649,10 @@ fi
 
 ###############################################################################
 # 12. VPC & Subnets
-# Output used: vpc_id, public_subnet_ids, private_subnet_ids
+# Output used: vpc_id, public_subnet_ids, private_subnet_ids, database_subnet_ids
+# Expected: 6 subnets — 2 public (NLB, NAT), 2 private (EC2), 2 database (RDS).
 ###############################################################################
-section "12. VPC & Subnets  [outputs: vpc_id, public_subnet_ids, private_subnet_ids]"
+section "12. VPC & Subnets  [outputs: vpc_id, public_subnet_ids, private_subnet_ids, database_subnet_ids]"
 
 if [[ -n "$VPC_ID" ]]; then
   VPC_JSON=$($AWS ec2 describe-vpcs --vpc-ids "${VPC_ID}" | jq '.Vpcs[0]')
@@ -593,6 +668,7 @@ if [[ -n "$VPC_ID" ]]; then
   # Validate subnets from terraform output against what exists in AWS
   PUB_COUNT=$(echo "$TF_PUBLIC_SUBNETS"  | jq 'length')
   PRI_COUNT=$(echo "$TF_PRIVATE_SUBNETS" | jq 'length')
+  DBS_COUNT=$(echo "$TF_DB_SUBNETS"      | jq 'length')
 
   if [[ "$PUB_COUNT" -ge 2 ]]; then
     pass "Public subnets in terraform output: ${PUB_COUNT}"
@@ -606,8 +682,14 @@ if [[ -n "$VPC_ID" ]]; then
     warn "Expected 2 private subnets in terraform output, found: ${PRI_COUNT}"
   fi
 
+  if [[ "$DBS_COUNT" -ge 2 ]]; then
+    pass "Database subnets in terraform output: ${DBS_COUNT}"
+  else
+    warn "Expected 2 database subnets in terraform output, found: ${DBS_COUNT}"
+  fi
+
   # Confirm all output subnets actually exist in AWS
-  ALL_SUBNETS=$(echo "${TF_PUBLIC_SUBNETS} ${TF_PRIVATE_SUBNETS}" \
+  ALL_SUBNETS=$(echo "${TF_PUBLIC_SUBNETS} ${TF_PRIVATE_SUBNETS} ${TF_DB_SUBNETS}" \
     | jq -s 'add | unique | map(select(. != null)) | join(",")')
   ALL_SUBNETS="${ALL_SUBNETS//\"/}"
 
@@ -616,10 +698,10 @@ if [[ -n "$VPC_ID" ]]; then
       --filters "Name=vpc-id,Values=${VPC_ID}" \
       | jq '.Subnets | length')
     info "Total subnets in VPC: ${LIVE_SUBNET_COUNT}"
-    if [[ "$LIVE_SUBNET_COUNT" -ge 4 ]]; then
-      pass "Subnet count correct (expected 4+, found ${LIVE_SUBNET_COUNT})"
+    if [[ "$LIVE_SUBNET_COUNT" -ge 6 ]]; then
+      pass "Subnet count correct (expected 6+, found ${LIVE_SUBNET_COUNT})"
     else
-      warn "Expected at least 4 subnets, found ${LIVE_SUBNET_COUNT}"
+      warn "Expected at least 6 subnets, found ${LIVE_SUBNET_COUNT}"
     fi
   fi
 else
@@ -658,26 +740,193 @@ else
 fi
 
 ###############################################################################
-# 14. HTTP Endpoint Reachability
+# 14. Database (RDS for PostgreSQL, Multi-AZ DB instance)
+# Output used: db_instance_identifier, db_security_group_id, ec2_security_group_id
+# One DB identifier: a primary plus a synchronous standby in a second AZ.
+# The security groups examined are the ones attached to the instance. Expected:
+# one ingress rule, TCP 5432 from the EC2 security group by reference, and no
+# egress rule. The egress count is reported for information only.
 ###############################################################################
-section "14. HTTP Endpoint Reachability"
+section "14. Database (RDS)  [outputs: db_instance_identifier, db_security_group_id, ec2_security_group_id]"
+
+DB_JSON=$($AWS rds describe-db-instances --db-instance-identifier "${DB_ID}" 2>/dev/null \
+          || echo '{"DBInstances":[]}')
+DB_COUNT=$(echo "$DB_JSON" | jq '.DBInstances | length')
+
+if [[ "$DB_COUNT" -eq 0 ]]; then
+  fail "RDS instance '${DB_ID}' not found"
+else
+  DB_INST=$(echo      "$DB_JSON" | jq '.DBInstances[0]')
+  # No "// default" on the three flags: jq treats false as missing.
+  DB_STATUS=$(echo    "$DB_INST" | jq -r '.DBInstanceStatus')
+  DB_MULTI_AZ=$(echo  "$DB_INST" | jq -r '.MultiAZ')
+  DB_PUBLIC=$(echo    "$DB_INST" | jq -r '.PubliclyAccessible')
+  DB_ENCRYPTED=$(echo "$DB_INST" | jq -r '.StorageEncrypted')
+  DB_VPC_ID=$(echo    "$DB_INST" | jq -r '.DBSubnetGroup.VpcId // ""')
+  DB_SG_CSV=$(echo    "$DB_INST" | jq -r '[(.VpcSecurityGroups // [])[].VpcSecurityGroupId] | join(",")')
+
+  info "$(echo "$DB_INST" | jq -r '"Engine: \(.Engine) \(.EngineVersion) | Class: \(.DBInstanceClass) | AZ: \(.AvailabilityZone // "n/a") | Standby AZ: \(.SecondaryAvailabilityZone // "n/a")"')"
+
+  if [[ "$DB_STATUS" == "available" ]]; then
+    pass "RDS instance '${DB_ID}' status: available"
+  else
+    fail "RDS instance '${DB_ID}' status: ${DB_STATUS} (expected: available)"
+  fi
+
+  if [[ "$DB_MULTI_AZ" == "true" ]]; then
+    pass "Multi-AZ: on (primary plus synchronous standby)"
+  else
+    fail "Multi-AZ: off (expected: on)"
+  fi
+
+  if [[ "$DB_PUBLIC" == "false" ]]; then
+    pass "Publicly accessible: no"
+  else
+    fail "Publicly accessible: ${DB_PUBLIC} (expected: false)"
+  fi
+
+  if [[ "$DB_ENCRYPTED" == "true" ]]; then
+    pass "Storage encrypted: yes"
+  else
+    fail "Storage encrypted: ${DB_ENCRYPTED} (expected: true)"
+  fi
+
+  # DB security group — ingress only from the EC2 security group.
+  # EC2 security group ID: terraform output, else lookup by name in the DB's VPC.
+  EC2_SG_FOR_DB="${TF_EC2_SG_ID}"
+  if [[ -z "$EC2_SG_FOR_DB" && -n "$DB_VPC_ID" ]]; then
+    EC2_SG_LOOKUP=$($AWS ec2 describe-security-groups \
+      --filters "Name=group-name,Values=${EC2_SG_NAME}" "Name=vpc-id,Values=${DB_VPC_ID}" 2>/dev/null \
+      || echo '{"SecurityGroups":[]}')
+    EC2_SG_FOR_DB=$(echo "$EC2_SG_LOOKUP" | jq -r '.SecurityGroups[0].GroupId // ""')
+  fi
+
+  if [[ -n "$TF_DB_SG_ID" && ",${DB_SG_CSV}," != *",${TF_DB_SG_ID},"* ]]; then
+    warn "DB security group mismatch — terraform output: ${TF_DB_SG_ID} | attached to instance: ${DB_SG_CSV:-none}"
+  fi
+
+  if [[ -z "$DB_SG_CSV" ]]; then
+    fail "RDS instance has no VPC security group attached"
+  elif [[ -z "$EC2_SG_FOR_DB" ]]; then
+    warn "EC2 security group '${EC2_SG_NAME}' not found — DB security group ingress not checked"
+  else
+    DB_SG_JSON=$($AWS ec2 describe-security-groups \
+      --filters "Name=group-id,Values=${DB_SG_CSV}" 2>/dev/null || echo '{"SecurityGroups":[]}')
+    DB_SG_FOUND=$(echo "$DB_SG_JSON" | jq '.SecurityGroups | length')
+    DB_INGRESS=$(echo  "$DB_SG_JSON" | jq '[.SecurityGroups[].IpPermissions[]] | length')
+    DB_EGRESS=$(echo   "$DB_SG_JSON" | jq '[.SecurityGroups[].IpPermissionsEgress[]] | length')
+    # Every ingress permission that is NOT exactly "TCP 5432 from the EC2 security group only".
+    DB_INGRESS_BAD=$(echo "$DB_SG_JSON" | jq -r --arg ec2 "$EC2_SG_FOR_DB" '
+      .SecurityGroups[].IpPermissions[]
+      | select((.IpProtocol=="tcp" and .FromPort==5432 and .ToPort==5432
+                and ((.IpRanges // []) | length)==0
+                and ((.Ipv6Ranges // []) | length)==0
+                and ((.PrefixListIds // []) | length)==0
+                and ([(.UserIdGroupPairs // [])[].GroupId] == [$ec2])) | not)
+      | "    \(.IpProtocol) \(.FromPort // "all")-\(.ToPort // "all") from \([(.IpRanges // [])[].CidrIp, (.Ipv6Ranges // [])[].CidrIpv6, (.PrefixListIds // [])[].PrefixListId, (.UserIdGroupPairs // [])[].GroupId] | join(", "))"')
+
+    if [[ "$DB_SG_FOUND" -eq 0 ]]; then
+      warn "DB security group(s) ${DB_SG_CSV} could not be read — ingress not checked"
+    else
+      info "DB security group(s): ${DB_SG_CSV} | Ingress rules: ${DB_INGRESS} | Egress rules: ${DB_EGRESS}"
+      if [[ "$DB_INGRESS" -eq 0 ]]; then
+        fail "DB security group has no ingress rule — instances cannot reach the database"
+      elif [[ -z "$DB_INGRESS_BAD" ]]; then
+        pass "DB security group ingress: TCP 5432 from the EC2 security group (${EC2_SG_FOR_DB}) only"
+      else
+        fail "DB security group has ingress other than TCP 5432 from the EC2 security group (${EC2_SG_FOR_DB}):"
+        echo "$DB_INGRESS_BAD"
+      fi
+    fi
+  fi
+fi
+
+###############################################################################
+# 15. HTTPS Endpoint, Database Status Line & Port 80
+# Output used: https_url, nlb_dns_name
+#
+# The certificate is issued for the hostname, not for the NLB DNS name, so the
+# request goes to https://<hostname>/. curl checks the certificate chain and
+# the hostname: there is no -k, and -q makes curl ignore ~/.curlrc.
+#
+# The page carries a boot-time database status line, exactly
+# "<p>Database: connected</p>" or "<p>Database: unreachable</p>". It is a
+# snapshot taken once when the instance booted, and one request reads the page
+# of one instance. User data writes the page only after its database check has
+# finished; until then a new instance serves the web server's default page,
+# which has no status line.
+#
+# Port 80 is expected closed (no listener, no security group rule), so a plain
+# http:// request must fail to open a TCP connection. That request goes to the
+# NLB DNS name, which does not depend on the Cloudflare record; the hostname is
+# used only if the NLB DNS name is unavailable.
+###############################################################################
+section "15. HTTPS Endpoint, Database Status & Port 80  [outputs: https_url, nlb_dns_name]"
 
 NLB_DNS_CHECK="${NLB_DNS:-${TF_NLB_DNS}}"
+HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+NO_CONNECT_RE='^0[.,]?0*$'
+NL=$'\n'
 
-if [[ -n "${NLB_DNS_CHECK}" ]]; then
-  info "Testing HTTP → http://${NLB_DNS_CHECK}/"
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    "http://${NLB_DNS_CHECK}/" 2>/dev/null || echo "000")
+if [[ -z "${DOMAIN_NAME}" ]]; then
+  warn "Skipping HTTPS and page checks — hostname unknown (pass --domain-name, or set domain_name in prod.tfvars)"
+elif [[ ! "${DOMAIN_NAME}" =~ $HOSTNAME_RE ]]; then
+  warn "Skipping HTTPS and page checks — '${DOMAIN_NAME}' is not a hostname"
+  DOMAIN_NAME=""
+else
+  info "Testing HTTPS → https://${DOMAIN_NAME}/"
+  HTTPS_RC=0
+  HTTPS_RESP=$(curl -q -s --max-time 10 -w '\n%{http_code}' \
+    "https://${DOMAIN_NAME}/" 2>/dev/null) || HTTPS_RC=$?
+  HTTP_CODE=${HTTPS_RESP##*"$NL"}
+  HTTPS_BODY=${HTTPS_RESP%"$NL"*}
 
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    pass "HTTP 200 — web server is responding"
-  elif [[ "$HTTP_CODE" == "000" ]]; then
-    fail "Connection failed (timeout or refused) — DNS may not have propagated, or no healthy targets"
+  if [[ "$HTTPS_RC" -eq 0 ]]; then
+    pass "TLS handshake completed — certificate is valid for ${DOMAIN_NAME}"
+
+    if [[ "$HTTP_CODE" == "200" ]]; then
+      pass "HTTPS 200 — web server is responding"
+
+      if grep -qF '<p>Database: connected</p>' <<< "$HTTPS_BODY"; then
+        pass "Page reports Database: connected"
+      elif grep -qF '<p>Database: unreachable</p>' <<< "$HTTPS_BODY"; then
+        fail "Page reports Database: unreachable — the instance that answered could not reach the database when it booted"
+      else
+        warn "No database status line on the page — a new instance serves the default page until its boot-time check finishes; re-run in a few minutes"
+      fi
+    else
+      warn "HTTPS ${HTTP_CODE} response (expected 200) — database status line not checked"
+    fi
+  elif [[ "$HTTPS_RC" -eq 60 || "$HTTPS_RC" -eq 51 ]]; then
+    fail "Certificate check failed for ${DOMAIN_NAME} (curl exit ${HTTPS_RC}) — not trusted, expired, or issued for another name"
+  elif [[ "$HTTPS_RC" -eq 6 ]]; then
+    fail "Could not resolve ${DOMAIN_NAME} — the DNS record is missing or has not propagated"
+  elif [[ "$HTTPS_RC" -eq 7 || "$HTTPS_RC" -eq 28 ]]; then
+    fail "Connection failed (timeout or refused) — no TLS:443 listener, or no healthy targets"
   else
-    warn "HTTP ${HTTP_CODE} response (expected 200)"
+    fail "HTTPS request failed (curl exit ${HTTPS_RC})"
+  fi
+fi
+
+PORT80_HOST="${NLB_DNS_CHECK:-${DOMAIN_NAME}}"
+
+if [[ -n "${PORT80_HOST}" ]]; then
+  info "Testing port 80 is closed → http://${PORT80_HOST}/"
+  PORT80_RC=0
+  PORT80_OUT=$(curl -q -s -o /dev/null -w '%{http_code} %{time_connect}' \
+    --connect-timeout 5 --max-time 10 "http://${PORT80_HOST}/" 2>/dev/null) || PORT80_RC=$?
+  PORT80_CODE="${PORT80_OUT%% *}"
+  PORT80_TCONN="${PORT80_OUT##* }"
+
+  if [[ "$PORT80_RC" -eq 6 ]]; then
+    warn "Could not resolve ${PORT80_HOST} — port 80 not checked"
+  elif [[ ( "$PORT80_RC" -eq 7 || "$PORT80_RC" -eq 28 ) && "$PORT80_CODE" == "000" && "$PORT80_TCONN" =~ $NO_CONNECT_RE ]]; then
+    pass "Port 80 is closed — no TCP connection could be opened"
+  else
+    fail "Port 80 is not closed (HTTP ${PORT80_CODE:-none}, curl exit ${PORT80_RC}) — expected no listener and no security group rule"
   fi
 else
-  warn "Skipping HTTP check — NLB DNS unavailable"
+  warn "Skipping port 80 check — neither the NLB DNS name nor the hostname is available"
 fi
 
 ###############################################################################

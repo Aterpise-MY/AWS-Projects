@@ -1,0 +1,65 @@
+# =============================================================================
+# terraform.tfvars.example — sample values
+#
+# Copy this file to terraform.tfvars, replace every REPLACE_WITH_... value with
+# your own, then run terraform init and terraform plan.
+#
+# terraform.tfvars is ignored by git: it holds real VPC, subnet and route table
+# IDs. Never put a password or an API token in it. The Cloudflare API token is
+# read only from the environment:
+#
+#   export CLOUDFLARE_API_TOKEN=...   # Zone, DNS, Edit on the one zone
+#
+# There is no database password variable. RDS generates the master password
+# and keeps it in Secrets Manager.
+# =============================================================================
+
+region      = "us-east-1"
+app_name    = "WebApp"
+environment = "production"
+
+# ---  Networking (replace with your own IDs)  --------------------------------
+vpc_id                = "REPLACE_WITH_VPC_ID"                # vpc-...
+public_route_table_id = "REPLACE_WITH_PUBLIC_ROUTE_TABLE_ID" # rtb-..., the table with the 0.0.0.0/0 route to the internet gateway
+
+subnet_ids = [
+  "REPLACE_WITH_PUBLIC_SUBNET_ID", # subnet-..., the pre-existing public subnet in us-east-1a
+  # us-east-1b is managed by Terraform (aws_subnet.web_1b) — do not add it here
+]
+
+# Database subnets created by Terraform, as Availability Zone = CIDR block.
+# The ranges must be unused inside the VPC. These are the defaults.
+database_subnets = {
+  "us-east-1a" = "10.0.0.64/28"
+  "us-east-1b" = "10.0.0.80/28"
+}
+
+# ---  HTTPS  -----------------------------------------------------------------
+domain_name        = "webapp-alb.aterpise.com"
+cloudflare_zone_id = "REPLACE_WITH_CLOUDFLARE_ZONE_ID" # 32-character hexadecimal zone ID
+
+# ssl_policy = "ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09" # default
+
+# ---  EC2  -------------------------------------------------------------------
+instance_type = "t3.medium"
+
+# Optional. Port 22 is not open; shell access is through Session Manager.
+# key_pair_name = "REPLACE_WITH_KEY_PAIR_NAME"
+
+# ---  Database  --------------------------------------------------------------
+db_instance_class          = "db.t3.micro"
+db_master_username         = "dbadmin"
+db_backup_retention_period = 7
+
+# Defaults suit a stack that is created and destroyed often. A production
+# stack would set db_deletion_protection = true and db_skip_final_snapshot = false.
+db_deletion_protection = false
+db_skip_final_snapshot = true
+
+# ---  Auto Scaling  ----------------------------------------------------------
+asg_desired = 2
+asg_min     = 1
+asg_max     = 4
+
+scale_out_cpu_threshold = 60
+scale_in_cpu_threshold  = 40

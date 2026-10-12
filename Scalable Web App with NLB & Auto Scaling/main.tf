@@ -6,6 +6,14 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+# Latest Amazon Linux 2023 x86_64 AMI (standard AMI, default kernel), published
+# by AWS as a public SSM parameter. Not read when var.ami_id overrides it.
+data "aws_ssm_parameter" "al2023_ami" {
+  count = var.ami_id == "" ? 1 : 0
+
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
 ###############################################################################
 # NETWORKING — VPC MODULE
 ###############################################################################
@@ -21,8 +29,20 @@ module "vpc" {
   public_subnets  = var.public_subnet_cidrs
   private_subnets = var.private_subnet_cidrs
 
+  # Database tier: dedicated subnets, the module's DB subnet group, and separate
+  # database route tables that hold the local VPC route only. The two route
+  # flags are the module defaults; they are set here so the "no NAT gateway
+  # route, no internet gateway route" intent is explicit. Without
+  # create_database_subnet_route_table the module would attach these subnets to
+  # the private (NAT-routed) route tables.
+  database_subnets                       = var.database_subnet_cidrs
+  create_database_subnet_group           = true
+  create_database_subnet_route_table     = true
+  create_database_nat_gateway_route      = false
+  create_database_internet_gateway_route = false
+
   enable_nat_gateway     = true
-  single_nat_gateway     = false   # one NAT GW per AZ for HA
+  single_nat_gateway     = false # one NAT GW per AZ for HA
   one_nat_gateway_per_az = true
 
   enable_dns_hostnames = true
@@ -39,21 +59,14 @@ module "vpc" {
 # SECURITY GROUPS
 ###############################################################################
 
-# NLB security group — accepts public traffic on 80 and 443.
-# Security Note: ports 80/443 are open to 0.0.0.0/0; this is intentional
-# because the NLB must be reachable from the internet.
+# NLB security group — accepts public traffic on 443 only.
+# Security Note: port 443 is open to 0.0.0.0/0; this is intentional because
+# the NLB must be reachable from the internet. Port 80 is closed: there is no
+# listener and no rule for it, because an NLB can only forward, not redirect.
 resource "aws_security_group" "nlb" {
   name        = "${var.project_name}-${var.environment}-nlb-sg"
-  description = "Allow inbound HTTP/HTTPS to the NLB"
+  description = "Allow inbound TLS 443 to the NLB"
   vpc_id      = module.vpc.vpc_id
-
-  ingress {
-    description = "HTTP from internet"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   ingress {
     description = "HTTPS from internet"
@@ -103,6 +116,81 @@ resource "aws_security_group" "ec2" {
   }
 }
 
+# DB security group — PostgreSQL from the EC2 security group only, by
+# security-group reference. There is no other ingress and no egress rule: the
+# database opens no outbound connections, and replies to the instances are
+# allowed because security groups are stateful.
+resource "aws_security_group" "db" {
+  name        = "${var.project_name}-${var.environment}-db-sg"
+  description = "Allow PostgreSQL from the EC2 security group only"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description     = "PostgreSQL from EC2 instances"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2.id]
+  }
+
+  # Explicitly empty, so the plan shows that this group has no egress rules.
+  egress = []
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-db-sg"
+  }
+}
+
+###############################################################################
+# DATABASE — RDS FOR POSTGRESQL (MULTI-AZ DB INSTANCE)
+#
+# One DB identifier: a primary plus a synchronous standby in a second AZ, with
+# a single endpoint. The standby cannot be queried.
+#
+# There is no password argument and no password variable. RDS generates the
+# master password, stores it in Secrets Manager and rotates it; this
+# configuration only ever handles the secret's ARN.
+#
+# Only the major engine version is set, with automatic minor upgrades on, so
+# RDS picks the minor version.
+###############################################################################
+
+resource "aws_db_instance" "main" {
+  identifier = "${var.project_name}-${var.environment}-db"
+
+  engine                     = "postgres"
+  engine_version             = "18"
+  auto_minor_version_upgrade = true
+  instance_class             = var.db_instance_class
+  multi_az                   = true
+
+  # 20 GB gp3, encrypted with the AWS-managed aws/rds key (no kms_key_id).
+  # max_allocated_storage is not set, so storage autoscaling stays off.
+  allocated_storage = 20
+  storage_type      = "gp3"
+  storage_encrypted = true
+
+  username                    = var.db_master_username
+  manage_master_user_password = true
+
+  db_subnet_group_name   = module.vpc.database_subnet_group_name
+  vpc_security_group_ids = [aws_security_group.db.id]
+  publicly_accessible    = false
+
+  backup_retention_period = var.db_backup_retention_period
+
+  # Production note: a production stack would turn deletion protection on and
+  # keep a final snapshot. The defaults suit a stack that is routinely
+  # destroyed and holds no real data.
+  deletion_protection       = var.db_deletion_protection
+  skip_final_snapshot       = var.db_skip_final_snapshot
+  final_snapshot_identifier = var.db_skip_final_snapshot ? null : "${var.project_name}-${var.environment}-db-final"
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-db"
+  }
+}
+
 ###############################################################################
 # IAM — EC2 ROLE & INSTANCE PROFILE
 ###############################################################################
@@ -130,6 +218,23 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Lets instances read the one RDS-managed master secret, for the boot-time
+# database check in user data. One action on one secret ARN, nothing else.
+resource "aws_iam_role_policy" "db_secret_read" {
+  name = "${var.project_name}-${var.environment}-db-secret-read"
+  role = aws_iam_role.ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadDbMasterSecret"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = aws_db_instance.main.master_user_secret[0].secret_arn
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2" {
   name = "${var.project_name}-${var.environment}-ec2-profile"
   role = aws_iam_role.ec2.name
@@ -140,18 +245,68 @@ resource "aws_iam_instance_profile" "ec2" {
 ###############################################################################
 
 locals {
-  nginx_user_data = <<-EOF
+  # Latest Amazon Linux 2023 x86_64 AMI unless var.ami_id overrides it.
+  ami_id = var.ami_id != "" ? var.ami_id : one(data.aws_ssm_parameter.al2023_ami[*].insecure_value)
+
+  # Per-web-server settings on Amazon Linux 2023. One user data script serves
+  # both web_server variants, so the database check exists in one place.
+  web_servers = {
+    nginx = {
+      package  = "nginx"
+      service  = "nginx"
+      doc_root = "/usr/share/nginx/html"
+      label    = "Nginx"
+    }
+    apache = {
+      package  = "httpd"
+      service  = "httpd"
+      doc_root = "/var/www/html"
+      label    = "Apache"
+    }
+  }
+  web = local.web_servers[var.web_server]
+
+  # User data for Amazon Linux 2023 only (dnf and AL2023 package names).
+  #
+  # Boot-time database check: the instance role reads the RDS-managed master
+  # secret, psql runs SELECT 1 with TLS required, and the page gets one line,
+  # "Database: connected" or "Database: unreachable".
+  #   - The web server is installed and started first and the page is written
+  #     whatever the check returns, so NLB health checks never depend on the
+  #     database.
+  #   - The script writes nothing but that one word to the page, and nothing to
+  #     a log or to disk: the check's output is captured or discarded, and
+  #     there is no "set -x". The user name and password are read from the
+  #     secret at run time and reach psql only through its process environment.
+  #   - The retry is bounded: 5 attempts, 5 seconds apart.
+  #
+  # Note: the database address, port and secret ARN are part of this user data
+  # text, so they are readable wherever user data is (the launch template, and
+  # the copy cloud-init keeps on the instance). None of them is a credential.
+  # The user name and password are never in user data.
+  # Note: the check uses the master credential. That is acceptable for a
+  # connectivity proof and not for a real application.
+  # Note: the status is a boot-time snapshot. It does not change if the
+  # database becomes unreachable later.
+  # Note: sslmode=require encrypts the connection but does not verify the
+  # server certificate.
+  user_data = <<-EOF
     #!/bin/bash
     set -e
-    yum update -y 2>/dev/null || apt-get update -y
-    # Install nginx
-    if command -v yum &>/dev/null; then
-      yum install -y nginx
-    else
-      apt-get install -y nginx
-    fi
-    systemctl enable nginx
-    systemctl start nginx
+    dnf update -y
+    dnf install -y ${local.web.package}
+    systemctl enable ${local.web.service}
+    systemctl start ${local.web.service}
+
+    # PostgreSQL client for the boot-time database check, newest first: an AMI
+    # pinned to an older AL2023 release does not carry postgresql18. A failed
+    # install is not fatal; the check then reports "unreachable".
+    for pkg in postgresql18 postgresql17 postgresql16 postgresql15; do
+      if dnf install -y "$pkg"; then
+        break
+      fi
+    done
+
     # Fetch instance metadata (IMDSv2)
     TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
       -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
@@ -159,7 +314,38 @@ locals {
       http://169.254.169.254/latest/meta-data/instance-id)
     AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
       http://169.254.169.254/latest/meta-data/placement/availability-zone)
-    cat > /usr/share/nginx/html/index.html <<HTML
+
+    # Boot-time database check. The output of every command in db_check is
+    # captured or discarded, so nothing from the secret or the connection
+    # reaches the cloud-init log.
+    db_check() {
+      local secret db_user db_pass
+      secret=$(timeout 10 aws secretsmanager get-secret-value \
+        --region "${var.region}" \
+        --secret-id "${aws_db_instance.main.master_user_secret[0].secret_arn}" \
+        --query SecretString --output text 2>/dev/null) || return 1
+      db_user=$(printf '%s' "$secret" | python3 -c \
+        'import json,sys; sys.stdout.write(json.load(sys.stdin)["username"])' 2>/dev/null) || return 1
+      db_pass=$(printf '%s' "$secret" | python3 -c \
+        'import json,sys; sys.stdout.write(json.load(sys.stdin)["password"])' 2>/dev/null) || return 1
+      PGHOST="${aws_db_instance.main.address}" PGPORT="${aws_db_instance.main.port}" \
+        PGDATABASE=postgres PGUSER="$db_user" PGPASSWORD="$db_pass" \
+        PGSSLMODE=require PGCONNECT_TIMEOUT=5 \
+        psql -X -q -w -tAc 'SELECT 1' >/dev/null 2>&1
+    }
+
+    DB_STATUS="unreachable"
+    for attempt in 1 2 3 4 5; do
+      if db_check; then
+        DB_STATUS="connected"
+        break
+      fi
+      if [ "$attempt" -lt 5 ]; then
+        sleep 5
+      fi
+    done
+
+    cat > ${local.web.doc_root}/index.html <<HTML
     <!DOCTYPE html>
     <html>
       <head><title>${var.project_name}</title></head>
@@ -167,59 +353,18 @@ locals {
         <h1>${var.project_name} — ${var.environment}</h1>
         <p>Instance ID: $INSTANCE_ID</p>
         <p>Availability Zone: $AZ</p>
-        <p>Web Server: Nginx</p>
+        <p>Web Server: ${local.web.label}</p>
+        <p>Database: $DB_STATUS</p>
       </body>
     </html>
     HTML
-    systemctl restart nginx
+    systemctl restart ${local.web.service}
   EOF
-
-  apache_user_data = <<-EOF
-    #!/bin/bash
-    set -e
-    yum update -y 2>/dev/null || apt-get update -y
-    # Install Apache
-    if command -v yum &>/dev/null; then
-      yum install -y httpd
-      systemctl enable httpd
-      systemctl start httpd
-    else
-      apt-get install -y apache2
-      systemctl enable apache2
-      systemctl start apache2
-    fi
-    # Fetch instance metadata (IMDSv2)
-    TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-      -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-      http://169.254.169.254/latest/meta-data/instance-id)
-    AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-      http://169.254.169.254/latest/meta-data/placement/availability-zone)
-    cat > /var/www/html/index.html <<HTML
-    <!DOCTYPE html>
-    <html>
-      <head><title>${var.project_name}</title></head>
-      <body>
-        <h1>${var.project_name} — ${var.environment}</h1>
-        <p>Instance ID: $INSTANCE_ID</p>
-        <p>Availability Zone: $AZ</p>
-        <p>Web Server: Apache</p>
-      </body>
-    </html>
-    HTML
-    if command -v yum &>/dev/null; then
-      systemctl restart httpd
-    else
-      systemctl restart apache2
-    fi
-  EOF
-
-  user_data = var.web_server == "nginx" ? local.nginx_user_data : local.apache_user_data
 }
 
 resource "aws_launch_template" "web" {
   name_prefix   = "${var.project_name}-${var.environment}-lt-"
-  image_id      = var.ami_id
+  image_id      = local.ami_id
   instance_type = var.instance_type
   key_name      = var.key_pair_name
 
@@ -307,10 +452,18 @@ resource "aws_lb_target_group" "web" {
   }
 }
 
-resource "aws_lb_listener" "http" {
+# The only listener. TLS ends at the NLB; the NLB forwards plain TCP to port 80
+# on the instances inside the VPC. There is no port 80 listener: an NLB cannot
+# redirect, so http:// requests to the hostname fail to connect.
+#
+# The certificate ARN comes from the validation resource, so this listener is
+# created only after ACM has issued the certificate.
+resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.web.arn
-  port              = 80
-  protocol          = "TCP"
+  port              = 443
+  protocol          = "TLS"
+  certificate_arn   = aws_acm_certificate_validation.web.certificate_arn
+  ssl_policy        = var.ssl_policy
 
   default_action {
     type             = "forward"
@@ -318,20 +471,59 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Created only when an ACM certificate ARN is provided.
-resource "aws_lb_listener" "https" {
-  count = var.acm_certificate_arn != "" ? 1 : 0
+###############################################################################
+# TLS CERTIFICATE & DNS (ACM + CLOUDFLARE)
+#
+# Both Cloudflare records are DNS-only (not proxied), so browsers negotiate TLS
+# with the NLB listener above. Cloudflare record names and values are written
+# without the trailing dot that ACM returns.
+###############################################################################
 
-  load_balancer_arn = aws_lb.web.arn
-  port              = 443
-  protocol          = "TLS"
-  certificate_arn   = var.acm_certificate_arn
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+resource "aws_acm_certificate" "web" {
+  domain_name       = var.domain_name
+  validation_method = "DNS"
 
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+  tags = {
+    Name = "${var.project_name}-${var.environment}-cert"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+locals {
+  # A certificate for a single name has exactly one validation record.
+  acm_validation = one(aws_acm_certificate.web.domain_validation_options)
+}
+
+# ACM validation CNAME. ACM also uses this record to renew the certificate, so
+# it must stay in place for as long as the certificate is in use.
+resource "cloudflare_dns_record" "acm_validation" {
+  zone_id = var.cloudflare_zone_id
+  name    = trimsuffix(local.acm_validation.resource_record_name, ".")
+  type    = "CNAME"
+  content = trimsuffix(local.acm_validation.resource_record_value, ".")
+  ttl     = 300
+  proxied = false
+}
+
+# Waits until ACM reports the certificate as issued.
+resource "aws_acm_certificate_validation" "web" {
+  certificate_arn = aws_acm_certificate.web.arn
+
+  depends_on = [cloudflare_dns_record.acm_validation]
+}
+
+# Hostname CNAME to the NLB. The NLB DNS name changes every time the stack is
+# destroyed and re-created, hence the short TTL.
+resource "cloudflare_dns_record" "web" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.domain_name
+  type    = "CNAME"
+  content = lower(aws_lb.web.dns_name)
+  ttl     = 60
+  proxied = false
 }
 
 ###############################################################################
@@ -387,6 +579,14 @@ resource "aws_autoscaling_group" "web" {
   lifecycle {
     ignore_changes = [desired_capacity]
   }
+
+  # Instances run the boot-time database check in user data, so the database
+  # and the policy that lets the instance role read its secret must exist
+  # before the first instance launches.
+  depends_on = [
+    aws_db_instance.main,
+    aws_iam_role_policy.db_secret_read,
+  ]
 }
 
 ###############################################################################
@@ -507,13 +707,13 @@ resource "aws_cloudwatch_metric_alarm" "healthy_hosts" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "network_in_high" {
-  alarm_name          = "${var.project_name}-${var.environment}-network-in-high"
-  alarm_description   = "High inbound network traffic on NLB"
-  namespace           = "AWS/NetworkELB"
-  metric_name         = "ProcessedBytes"
-  statistic           = "Sum"
-  period              = 300
-  evaluation_periods  = 2
+  alarm_name         = "${var.project_name}-${var.environment}-network-in-high"
+  alarm_description  = "High inbound network traffic on NLB"
+  namespace          = "AWS/NetworkELB"
+  metric_name        = "ProcessedBytes"
+  statistic          = "Sum"
+  period             = 300
+  evaluation_periods = 2
   # 1 GB per 5-minute period
   threshold           = 1073741824
   comparison_operator = "GreaterThanThreshold"
