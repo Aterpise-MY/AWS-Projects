@@ -81,6 +81,7 @@ A production-ready multi-tenant SaaS platform with complete tenant isolation at 
 **Links:**
 - 📄 [Full Documentation](Multi-Tenant%20SaaS%20Application/README.md)
 - 🧪 [Test Guides](Multi-Tenant%20SaaS%20Application/TESTING-GUIDE.md)
+- 📝 [Resume Summary](Resume/1_Multi_Tenant_SaaS_Application.md)
 
 ---
 
@@ -107,6 +108,7 @@ A classic three-tier web application architecture with web servers, application 
 
 **Links:**
 - 📄 [Full Documentation](Multi-Tier%20Web%20App%20Deployment/README.md)
+- 📝 [Resume Summary](Resume/2_Multi_Tier_Web_App_Deployment.md)
 
 ---
 
@@ -139,6 +141,7 @@ A scalable web tier behind an internet-facing Application Load Balancer (ALB), r
 
 **Links:**
 - 📄 [Full Documentation](Scalable%20Web%20App%20with%20ALB%20%26%20Auto%20Scaling/README.md)
+- 📝 [Resume Summary](Resume/3_Scalable_Web_App_ALB_Auto_Scaling.md)
 
 ---
 
@@ -174,6 +177,7 @@ A web tier in private subnets behind an internet-facing Network Load Balancer (N
 
 **Links:**
 - 📄 [Full Documentation](Scalable%20Web%20App%20with%20NLB%20%26%20Auto%20Scaling/README.md)
+- 📝 [Resume Summary](Resume/4_Scalable_Web_App_NLB_Auto_Scaling.md)
 
 ---
 
@@ -200,6 +204,7 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 
 **Links:**
 - 📄 [Full Documentation](Cloud-Tibot/README.md)
+- 📝 [Resume Summary](Resume/5_Cloud_Tibot.md)
 
 ---
 
@@ -231,6 +236,7 @@ A production-ready containerised web application deployed on AWS App Runner with
 - 📄 [Full Documentation](AWS%20App%20Runner%20Deployment/README.md)
 - 📊 [Live Audit Results](AWS%20App%20Runner%20Deployment/Result.md)
 - 🧪 [Architecture Test Script](AWS%20App%20Runner%20Deployment/Script/test_architecture.sh)
+- 📝 [Resume Summary](Resume/6_AWS_App_Runner_Deployment.md)
 
 ---
 
@@ -260,6 +266,7 @@ A production-deployed serverless event management system built on AWS for Youth 
 
 **Links:**
 - 📄 [Full Documentation](Event%20Ticket%20Check%20In%20System/README.md)
+- 📝 [Resume Summary](Resume/7_Event_Ticket_Check_In_System.md)
 
 ---
 
@@ -291,6 +298,7 @@ A fully serverless GraphQL backend using AWS AppSync and Amazon DynamoDB. Terraf
 **Links:**
 - 📄 [Full Documentation](GraphQL%20API%20with%20AWS%20AppSync/README.md)
 - 🧪 [Architecture Test Script](GraphQL%20API%20with%20AWS%20AppSync/scripts/test_architecture.sh)
+- 📝 [Resume Summary](Resume/8_GraphQL_API_with_AWS_AppSync.md)
 
 ---
 
@@ -322,6 +330,7 @@ A fully serverless internal short link platform (`go.techcorp.internal`) built o
 **Links:**
 - 📄 [Full Documentation](URL%20Shortener/README.md)
 - 🧪 [Architecture Test Script](URL%20Shortener/scripts/test_architecture.sh)
+- 📝 [Resume Summary](Resume/9_URL_Shortener.md)
 
 ---
 
@@ -354,6 +363,7 @@ A fully serverless real-time polling and interaction platform built on an API Ga
 - 📄 [Full Documentation](Real-time%20Polling%20App/README.md)
 - 📊 [Live Audit Results](Real-time%20Polling%20App/Result.md)
 - 🧪 [Architecture Test Script](Real-time%20Polling%20App/scripts/test_architecture.sh)
+- 📝 [Resume Summary](Resume/10_Real_time_Polling_App.md)
 
 ---
 
@@ -386,6 +396,7 @@ A fully serverless pipeline that scores the sentiment of every incoming Zendesk 
 - 📄 [Full Documentation](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/README.md)
 - 📊 [Live Audit Results](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/Result.md)
 - 🧪 [Architecture Test Script](Zendesk%20Ticket%20Triage%20with%20Sentiment%20Analysis/scripts/test_architecture.sh)
+- 📝 [Resume Summary](Resume/11_Zendesk_Ticket_Triage.md)
 
 ---
 
@@ -851,17 +862,17 @@ AWS Project/                                    # Root portfolio directory
 │   └── docs/                                # runbook + cost + architecture notes
 │
 ├── Resume/                                   # Portfolio summaries (git-ignored)
-│   ├── 1_ALB_Auto_Scaling.md
-│   ├── 2_NLB_Auto_Scaling.md
-│   ├── 3_Cloud_Tibot.md
-│   ├── 4_Multi_Tier_Web_App.md
-│   ├── 5_Multi-Tenant SaaS Application.md
-│   ├── 6_App_Runner_Deployment.md
+│   ├── 1_Multi_Tenant_SaaS_Application.md
+│   ├── 2_Multi_Tier_Web_App_Deployment.md
+│   ├── 3_Scalable_Web_App_ALB_Auto_Scaling.md
+│   ├── 4_Scalable_Web_App_NLB_Auto_Scaling.md
+│   ├── 5_Cloud_Tibot.md
+│   ├── 6_AWS_App_Runner_Deployment.md
 │   ├── 7_Event_Ticket_Check_In_System.md
-│   ├── 8_GraphQL_AppSync.md
+│   ├── 8_GraphQL_API_with_AWS_AppSync.md
 │   ├── 9_URL_Shortener.md
-│   ├── 10_Zendesk_Ticket_Triage.md
-│   ├── 11_Real_time_Polling_App.md
+│   ├── 10_Real_time_Polling_App.md
+│   ├── 11_Zendesk_Ticket_Triage.md
 │   ├── 12_Server_Room_Inspection_Dashboard.md
 │   ├── 13_Systems_Manager_Automated_Patching.md
 │   ├── 14_GitHub_Actions_ECS_Deployment.md
