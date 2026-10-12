@@ -1,0 +1,6 @@
+[submodule "Icebreaker Poll Game"]
+	path = Icebreaker Poll Game (ECS+Fargate+ALB)
+	url = https://github.com/Aterpise-MY/Icebreaker-Poll-Game.git
+[submodule "Love Opinion Poll Game (EKS+Fargate+ALB)"]
+	path = Love Opinion Poll Game (EKS+Fargate+ALB)
+	url = https://github.com/Aterpise-MY/Love-Opinion-Poll-Game.git

@@ -24,17 +24,17 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
            │ SendCommand (MW service role)                              │
            ▼                                                            ▼
 ┌──────────────────────┐                                    ┌──────────────────────┐
-│  Patch Baseline      │◄─ bind by Patch Group ─►            │  Patch Baseline      │
-│  AMAZON_LINUX_2023   │                                     │  UBUNTU              │
-│  Security Crit/Imp   │                                     │  Required/Important  │
-│  approve_after 7d    │                                     │  approve_after 7d    │
-└──────────┬───────────┘                                     └──────────┬───────────┘
+│  Patch Baseline      │◄─ bind by Patch Group ─►           │  Patch Baseline      │
+│  AMAZON_LINUX_2023   │                                    │  UBUNTU              │
+│  Security Crit/Imp   │                                    │  Required/Important  │
+│  approve_after 7d    │                                    │  approve_after 7d    │
+└──────────┬───────────┘                                    └──────────┬───────────┘
            │ tag Patch Group=prod-al2023                                │ tag Patch Group=prod-ubuntu
            ▼                                                            ▼
    ┌───────────────┐   IMDSv2 · gp3 encrypted · egress-only SG   ┌───────────────┐
    │  EC2 (AL2023) │──────────────┐                 ┌────────────│  EC2 (Ubuntu) │
    │  SSM Agent    │              ▼                 ▼            │  SSM Agent    │
-   └───────────────┘   ┌────────────────────────────────┐       └───────────────┘
+   └───────────────┘   ┌────────────────────────────────┐        └───────────────┘
                        │ Public Subnet → IGW → Internet  │  (SSM public endpoints,
                        │ outbound HTTPS 443 only         │   OS package repos)
                        └────────────────────────────────┘

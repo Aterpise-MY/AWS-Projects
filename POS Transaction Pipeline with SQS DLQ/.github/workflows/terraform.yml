@@ -1,0 +1,153 @@
+# =============================================================================
+# terraform.yml — POS Transaction Pipeline with SQS DLQ
+# =============================================================================
+# validate  → fmt/init/validate on every push and pull request. No AWS
+#             credentials, so it also runs green on forks.
+# plan      → terraform plan on pull requests.
+# apply     → terraform apply, only on a push to main, behind the `production`
+#             GitHub environment so a human still approves the deployment.
+#
+# PREREQUISITE: the GitHub OIDC identity provider and the IAM role this
+# pipeline assumes must already exist in account 022499047467 before the plan
+# and apply jobs can work. Create them first (Cloud Engineer), then set the
+# repository variable AWS_ROLE_ARN to the role ARN. Until then only `validate`
+# succeeds — which is intentional, since no long-lived AWS keys are stored in
+# this repository.
+# =============================================================================
+
+name: "Terraform — POS DLQ Pipeline"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "POS Transaction Pipeline with SQS DLQ/terraform/**"
+      - "POS Transaction Pipeline with SQS DLQ/lambda/**"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    paths:
+      - "POS Transaction Pipeline with SQS DLQ/terraform/**"
+      - "POS Transaction Pipeline with SQS DLQ/lambda/**"
+      - ".github/workflows/terraform.yml"
+
+concurrency:
+  group: pos-dlq-terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.9.8"
+  AWS_REGION: "ap-southeast-1"
+  TF_DIR: "POS Transaction Pipeline with SQS DLQ/terraform"
+
+jobs:
+  # ── 1. Validate — syntax only, no cloud access ─────────────────────────────
+  validate:
+    name: "Validate"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      # -backend=false keeps init offline: no S3 backend, no credentials.
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+  # ── 2. Unit tests — the consumer handlers ──────────────────────────────────
+  test:
+    name: "Lambda unit tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The suite is offline by design: no boto3, no credentials, no network.
+      - name: Run unit tests
+        working-directory: "POS Transaction Pipeline with SQS DLQ"
+        run: python3 -m unittest discover lambda -v
+
+  # ── 3. Plan — pull requests only ───────────────────────────────────────────
+  plan:
+    name: "Plan"
+    if: github.event_name == 'pull_request'
+    needs: [validate, test]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required to request the OIDC token
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -input=false -no-color
+
+  # ── 4. Apply — push to main only, gated by the production environment ──────
+  apply:
+    name: "Apply"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [validate, test]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve

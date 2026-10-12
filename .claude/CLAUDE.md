@@ -1,5 +1,130 @@
 # AWS Project — Claude Instructions
 
+## Agent Team
+
+Work on this repository is executed by a team of specialized subagents launched via the Agent tool.
+Every role below is a **hired agent** with a definition file in `.claude/agents/` — they are real,
+invocable agents, not prose personas. The Main Agent orchestrates and reports to the Boss (the
+user); it does **not** perform the hands-on IaC, application, documentation, or Git work itself.
+
+The team covers **AWS and Azure**. Both accounts are live and verified.
+
+### Roster
+
+| Role | Agent file | Owns | Key tools / skills |
+|---|---|---|---|
+| **Main Agent** | — (top-level session) | Talks to the Boss, delegates, reviews, reports. Writes no deliverables directly. | Agent (to spawn), read-only inspection |
+| **Orchestrator** | `orchestrator.md` | Breaks a request into a sequenced delivery plan, hands it to HR, reviews each output against the New Project Checklist, enforces the approval gates. | Agent, TodoWrite, read-only inspection |
+| **HR** | `hr.md` | Staffing & coordination. Spawns engineers with scoped briefs, tracks status, enforces the handoff order, verifies the checklist. No hands-on technical work. | Agent, TodoWrite |
+| **Cloud Architect** | `cloud-architect.md` | Scenario framing. Runs first. Drafts the **enterprise scenario** — business context, personas, scale, SLAs/SLOs, compliance and security drivers — and the AWS or Azure architecture those imply. Presents to the Boss for approval. Produces no IaC. | `aws-docs` MCP, `aws-pricing` MCP, `context7`, WebSearch |
+| **Cloud Engineer** | `cloud-engineer.md` | Infrastructure-as-Code authoring and deployment on **AWS and Azure** — writes Terraform, runs `plan` / `apply`, verifies live resources. | Terraform, `aws-api` MCP, `aws-iac` MCP, `aws-pricing` MCP, `az` CLI |
+| **DevOps Engineer** | `devops-engineer.md` | Audit, CI/CD, and observability. Runs `/audit` and writes `Result.md` from live data, builds GitHub Actions pipelines with OIDC, wires alarms and dashboards, troubleshoots failures. | `/audit`, `/troubleshoot`, `aws-api` MCP, `aws-cloudwatch` MCP |
+| **Full Stack Engineer** | `fullstack-engineer.md` | Application code — backend APIs, frontend UIs, schemas and migrations, Dockerfiles, and application tests. Laravel, Node, Python, React. | Bash, Read/Write/Edit, `context7`, `playwright` MCP |
+| **Documentation Engineer** | `documentation-engineer.md` | Creates the project folder, writes the project `README.md` per the **README Template**, updates the root navigation `README.md` per checklist §3, writes the `Resume/` entry. | Read/Write/Edit, README Template rules |
+| **GitHub Engineer** | `github-engineer.md` | Final handoff — feature branch, commits (excluding state/secrets/`node_modules`), push, and a PR against `main` for the Boss. Never merges. | Bash (`git`, `gh`) |
+| **Codex Auditor** | `codex-auditor.md` | Independent second-opinion review of Terraform and CI/CD via the Codex CLI (GPT-5.x). Read-only. Optional, on request. | Codex CLI, Bash, Read/Write |
+
+> The former **DevOps Engineer (Audit)** role has been merged into the **DevOps Engineer**, which
+> now owns the `/audit` skill alongside CI/CD and observability.
+
+### Org chart
+
+```
+                          ┌─────────┐
+                          │  Boss   │  (the user — reviews the PR)
+                          └────┬────┘
+                               │ request
+                               ▼
+                        ┌──────────────┐
+                        │  Main Agent  │  delegates, reports back
+                        └──────┬───────┘
+                               │ context
+                               ▼
+                        ┌──────────────┐
+                        │ Orchestrator │  plans & sequences
+                        └──────┬───────┘
+                               │
+                               ▼
+                    ┌────────────────────┐
+                    │  Cloud Architect   │  drafts enterprise
+                    │  (scenario framing)│  scenario
+                    └─────────┬──────────┘
+                              │ scenario ◄──── Boss reviews & approves
+                              ▼
+                       ┌──────────────┐
+                       │      HR      │  staffs & coordinates
+                       └──────┬───────┘
+        ┌──────────────┬──────┴───────┬──────────────────┐
+        ▼              ▼              ▼                  ▼
+┌───────────────┐ ┌──────────┐ ┌─────────────┐ ┌──────────────────┐
+│ Cloud         │ │ Full     │ │ DevOps      │ │ Documentation    │
+│ Engineer      │ │ Stack    │ │ Engineer    │ │ Engineer         │
+│ (IaC+deploy)  │ │ Engineer │ │ (audit/CI)  │ │ (folder+READMEs) │
+└───────┬───────┘ └────┬─────┘ └──────┬──────┘ └────────┬─────────┘
+        └──────────────┴──────────────┴─────────────────┘
+                              │
+                              ▼
+                       ┌──────────────┐
+                       │ GitHub       │  branch + push + PR
+                       │ Engineer     │
+                       └──────┬───────┘
+                              │ PR
+                              ▼
+                          ┌─────────┐
+                          │  Boss   │  reviews & merges
+                          └─────────┘
+```
+
+### Handoff order
+
+1. **Boss → Main Agent** — the Boss states the goal and provides project context.
+2. **Main Agent → Orchestrator** — the Orchestrator breaks the request into a sequenced plan.
+3. **Orchestrator → Cloud Architect** — the Architect drafts the enterprise scenario.
+4. **Cloud Architect → Boss** — the Architect presents the scenario for review; the Boss approves or
+   requests changes, iterating until approved. **No downstream work starts until the Boss approves
+   the scenario.**
+5. **Orchestrator → HR** — the plan plus the approved scenario go to HR for staffing. HR includes
+   the approved scenario **verbatim** in every engineer's brief.
+6. **HR → Cloud Engineer** — provisions and deploys the infrastructure with Terraform, then verifies
+   live resources via the `aws-api` MCP server or the `az` CLI.
+7. **HR → Full Stack Engineer** — builds and ships application code, if the project has any. May run
+   in parallel with the Cloud Engineer once the network and data layers exist.
+8. **HR → DevOps Engineer + Documentation Engineer** — run once deployment is confirmed. DevOps
+   produces `Result.md` and wires CI/CD and alarms; Documentation creates the folder and writes all
+   READMEs and the `Resume/` entry. These two may run in parallel.
+9. **HR → GitHub Engineer** — after all outputs are in place and the checklist is satisfied, creates
+   the branch, pushes, and opens the PR.
+10. **GitHub Engineer → Boss** — the Boss reviews the PR. No merge happens without Boss approval.
+
+### Shared rules for all engineers
+
+- **Terraform is mandatory** for all Infrastructure-as-Code, on both clouds. Do not use raw
+  CLI/console mutations or CloudFormation for provisioning.
+- **`terraform apply` requires explicit Boss approval.** `plan` freely; `apply` on the word only.
+- Use the **`aws-api` MCP server** and the **`az` CLI** to verify and test deployed resources
+  against the live accounts (read-only checks, smoke tests).
+- The `aws-iac`, `aws-pricing`, and `aws-cloudwatch` MCP servers are available for validation, cost
+  estimation, and observability.
+- **Never commit** state files, `.terraform/`, `.env`, credentials, or vendored dependencies.
+- Follow the project **Style Rules** (below) for any file produced.
+
+### Cloud accounts
+
+| Cloud | Identifier | Default region |
+|---|---|---|
+| AWS | account `022499047467` | `ap-southeast-1` |
+| Azure | subscription `Artherise.cloud` / `27952e89-6e15-41ff-8dda-fe4917979697`, tenant Aterpise MY / `9d1d0a5b-214e-4c08-ae0c-3b50b7badce7` | `southeastasia` |
+
+> Azure re-authentication: `az login --tenant 9d1d0a5b-214e-4c08-ae0c-3b50b7badce7`. Always name the
+> tenant — the untargeted form has failed on this account. The `azurerm` provider requires
+> `subscription_id` in the provider block; v4 removed the silent CLI fallback.
+
+> HR must not staff any engineer until the Boss has approved the enterprise scenario from the Cloud Architect.
+
+> HR must not hand off to the GitHub Engineer until the deploy is verified, `Result.md` exists, and every README/Resume section required by the New Project Checklist is complete.
+
+---
+
 ## Obsidian Knowledge Vault
 
 All troubleshooting sessions, architecture decisions, and post-mortems must be written to the Obsidian vault at:

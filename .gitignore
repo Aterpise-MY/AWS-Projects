@@ -89,3 +89,67 @@ Resume/
 # Miscellaneous
 FINOPS_SENTINEL_SUMMARY.md
 Cloud-Tibot/FINOPS_SETUP_CHECKLIST.md
+
+# ─────────────────────────────────────────────────────────────
+# Added by repo cleanup — build artifacts & vendored dependencies
+# ─────────────────────────────────────────────────────────────
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Python bytecode & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Compiled extensions
+*.so
+*.dylib
+
+# Vendored Python packages inside Lambda source dirs.
+# Rebuild with: pip install -r requirements.txt -t .
+# boto3/botocore are provided by the Lambda runtime and never need vendoring.
+**/lambda/**/boto3/
+**/lambda/**/botocore/
+**/lambda/**/psycopg2/
+**/lambda/**/urllib3/
+**/lambda/**/dateutil/
+**/lambda/**/jmespath/
+**/lambda_src/**/boto3/
+**/lambda_src/**/botocore/
+**/lambda_src/**/psycopg2/
+**/lambda_src/**/urllib3/
+**/lambda_src/**/dateutil/
+**/lambda_src/**/jmespath/
+**/*.dist-info/
+**/lambda*/**/bin/
+
+# Build output
+.build/
+dist/
+build/
+*.tsbuildinfo
+
+# Editor / OS
+.idea/
+.vscode/
+Thumbs.db
+
+# Vendored native library bundles & remaining lambda deps
+**/*.libs/
+**/lambda/**/s3transfer/
+**/lambda_src/**/s3transfer/
+**/lambda/**/six.py
+**/lambda_src/**/six.py
+**/lambda/**/charset_normalizer/
+**/lambda_src/**/charset_normalizer/
+*.so.*
