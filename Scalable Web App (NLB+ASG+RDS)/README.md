@@ -1,4 +1,4 @@
-# Scalable Web App with NLB & Auto Scaling
+# Scalable Web App (NLB+ASG+RDS)
 
 An infrastructure-as-code project that defines a horizontally scalable web
 application on AWS using Terraform. A Network Load Balancer (NLB) accepts HTTPS
@@ -542,7 +542,7 @@ file.
 
 ```bash
 # 1. Enter the project directory
-cd "Scalable Web App with NLB & Auto Scaling"
+cd "Scalable Web App (NLB+ASG+RDS)"
 
 # 2. Copy the example vars file and fill in the required values:
 #    key_pair_name, alarm_email, domain_name, cloudflare_zone_id

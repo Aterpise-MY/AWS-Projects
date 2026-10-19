@@ -1,4 +1,4 @@
-# FinOps Sentinel - Enterprise AWS Cost Monitoring System
+# Cloud-Tibot (Lambda+API Gateway+DynamoDB) — FinOps Sentinel
 
 **Status:** ✅ Production Deployed | ⚠️ Partial Configuration (Missing DynamoDB & Alarms)
 

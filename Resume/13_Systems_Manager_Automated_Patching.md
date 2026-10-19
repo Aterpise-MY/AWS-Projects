@@ -110,7 +110,7 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
 ## Quick Start
 
 ```bash
-cd "Systems Manager Automated Patching"
+cd "Systems Manager Automated Patching (SSM+EC2+SNS)"
 cp terraform.tfvars.example terraform.tfvars   # optionally set alert_email
 terraform init
 terraform plan
@@ -161,7 +161,7 @@ Region `us-east-1`, default `instance_count = 2`, running 24/7. SSM Patch Manage
 ## Project Structure
 
 ```
-Systems Manager Automated Patching/
+Systems Manager Automated Patching (SSM+EC2+SNS)/
 ├── main.tf                    # VPC, IAM, SG, EC2 targets, baselines, windows, tasks, SNS
 ├── variables.tf               # Inputs with validation (instance_count, patch_groups, schedules)
 ├── outputs.tf                 # VPC/instance IDs, role ARNs, baseline & window IDs, compliance hint
