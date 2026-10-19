@@ -1,4 +1,4 @@
-# YRC2026 — Serverless Event Ticketing & Check-In System
+# Event Ticket Check In System (API Gateway+SQS+Lambda) — YRC2026
 
 Serverless event registration, QR code ticketing, and staff check-in system for Youth Revival Conference 2026, built entirely on AWS managed services. Attendees register via Google Form; an Apps Script trigger calls API Gateway, which enqueues a job on an SQS FIFO queue; a Lambda function generates a personalised HTML email with an embedded QR code ticket and delivers it via the Gmail API; at the event, staff scan QR codes against a Google Spreadsheet to mark attendance.
 
@@ -237,7 +237,7 @@ Internet ──► API Gateway (HTTPS/TLS)
 ## 4. Directory Structure
 
 ```
-Event Ticket Check In System/
+Event Ticket Check In System (API Gateway+SQS+Lambda)/
 ├── README.md                                        ← This file
 ├── terraform/
 │   ├── provider.tf                                  ← AWS provider + Terraform version constraints
@@ -295,7 +295,7 @@ Event Ticket Check In System/
 
 ```bash
 # 1. Clone and enter the project
-cd "Event Ticket Check In System"
+cd "Event Ticket Check In System (API Gateway+SQS+Lambda)"
 
 # 2. Complete the Gmail OAuth flow locally (one-time step)
 #    This generates token_gmail_v1.json — required before apply

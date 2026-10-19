@@ -34,14 +34,14 @@ This portfolio showcases **9 AWS infrastructure projects** — 7 deployed and te
 | Project | Type | Best For | Time to Deploy | Est. Monthly Cost |
 |---------|------|----------|-----------------|-------------------|
 | [Multi-Tier Web App](#2-multi-tier-web-app-deployment) | EC2 + RDS | Enterprise web apps | 15-20 min | $280 |
-| [Scalable Web App (ALB)](#3-scalable-web-app-with-alb--auto-scaling) | ALB + ASG | Layer 7 routing | 12-18 min | $123.25 (HTTPS + RDS revision, not deployed) |
-| [Scalable Web App (NLB)](#4-scalable-web-app-with-nlb--auto-scaling) | NLB + ASG | High-performance APIs | 12-18 min | $196.25 (HTTPS + RDS revision, not deployed) |
-| [Cloud-Tibot](#5-cloud-tibot) | Microservices | Bot platforms, agents | Variable | Variable |
-| [Event Ticket Check-In System](#7-yrc2026-event-ticket-check-in-system) | Serverless (SQS + Lambda) | Event management, email automation | 8-12 min | ~$0.30/event |
-| [Systems Manager Automated Patching](#13-systems-manager-automated-patching) | SSM Patch Manager | Fleet OS patching, compliance SLAs | 10-15 min | ~$24/month* |
-| [Icebreaker Poll Game](#16-icebreaker-poll-game--human-vs-ai-live-audience-poll) | ECS Fargate + DynamoDB | Live audience polling, conference segments | 10-15 min | ~$92/month; ~$10/event |
+| [Scalable Web App (ALB+ASG+RDS)](#3-scalable-web-app-albasgrds) | ALB + ASG + RDS | Layer 7 routing | 12-18 min | $123.25 (HTTPS + RDS revision, not deployed) |
+| [Scalable Web App (NLB+ASG+RDS)](#4-scalable-web-app-nlbasgrds) | NLB + ASG + RDS | High-performance APIs | 12-18 min | $196.25 (HTTPS + RDS revision, not deployed) |
+| [Cloud-Tibot (Lambda+API Gateway+DynamoDB)](#5-cloud-tibot-lambdaapi-gatewaydynamodb) | Lambda + API Gateway + DynamoDB | Bot platforms, agents | Variable | Variable |
+| [Event Ticket Check-In System (API Gateway+SQS+Lambda)](#7-event-ticket-check-in-system-api-gatewaysqslambda) | API Gateway + SQS + Lambda | Event management, email automation | 8-12 min | ~$0.30/event |
+| [Systems Manager Automated Patching (SSM+EC2+SNS)](#13-systems-manager-automated-patching-ssmec2sns) | SSM + EC2 + SNS | Fleet OS patching, compliance SLAs | 10-15 min | ~$24/month* |
+| [Icebreaker Poll Game (ECS+Fargate+ALB)](#16-icebreaker-poll-game-ecsfargatealb) | ECS + Fargate + ALB | Live audience polling, conference segments | 10-15 min | ~$92/month; ~$10/event |
 | [POS Transaction Pipeline with SQS DLQ](#17-pos-transaction-pipeline-with-sqs-dead-letter-queues) | SNS fan-out + SQS DLQ + Lambda | Zero-silent-loss messaging, replayable failures | 3-5 min | ~$0.70/month* |
-| [Love Opinion Poll Game](#18-love-opinion-poll-game--live-opinion-poll-on-eks-fargate) | EKS Fargate + ALB + DynamoDB | Live audience opinion polls, single-event stacks | 20-30 min (runbook estimate) | ~$280/month; ~$9/day ($0 today, destroyed) |
+| [Love Opinion Poll Game (EKS+Fargate+ALB)](#18-love-opinion-poll-game-eksfargatealb) | EKS + Fargate + ALB | Live audience opinion polls, single-event stacks | 20-30 min (runbook estimate) | ~$280/month; ~$9/day ($0 today, destroyed) |
 
 > *Authored and `terraform validate`-clean; not currently deployed ($0 while destroyed).
 
@@ -75,9 +75,9 @@ A classic three-tier web application architecture with web servers, application 
 
 ---
 
-### 3. Scalable Web App with ALB & Auto Scaling
+### 3. Scalable Web App (ALB+ASG+RDS)
 
-**Location:** `./Scalable Web App with ALB & Auto Scaling/`  
+**Location:** `./Scalable Web App (ALB+ASG+RDS)/`  
 
 **Description:**  
 A scalable web tier behind an internet-facing Application Load Balancer (ALB), revised on 2026-10-07 to serve traffic over HTTPS and to add a Multi-AZ RDS for PostgreSQL 18 database tier (one primary plus a synchronous standby). The revised Terraform puts an `HTTPS:443` listener on the ALB for `webapp-alb.aterpise.com`, with an ACM certificate validated through Terraform-managed Cloudflare DNS records, and makes `HTTP:80` answer with a `301` redirect to HTTPS. Apache instances on Amazon Linux 2023 in an Auto Scaling Group run a boot-time connectivity check against the database and show `connected` or `unreachable` on a static page. The previous architecture (HTTP only, no database tier) was deployed in June 2026; the HTTPS and RDS revision is authored and validate-clean, not deployed.
@@ -103,13 +103,13 @@ A scalable web tier behind an internet-facing Application Load Balancer (ALB), r
 **Cost:** $123.25/month for the HTTPS and RDS revision, up $31.28 from $91.97 for the previous architecture. Basis: AWS Price List API, us-east-1, on-demand, 730 hours per month, idle baseline, queried 2026-10-07; usage-based charges (LCU, NAT data processing, data transfer) are excluded.
 
 **Links:**
-- 📄 [Full Documentation](Scalable%20Web%20App%20with%20ALB%20%26%20Auto%20Scaling/README.md)
+- 📄 [Full Documentation](Scalable%20Web%20App%20%28ALB%2BASG%2BRDS%29/README.md)
 
 ---
 
-### 4. Scalable Web App with NLB & Auto Scaling
+### 4. Scalable Web App (NLB+ASG+RDS)
 
-**Location:** `./Scalable Web App with NLB & Auto Scaling/`  
+**Location:** `./Scalable Web App (NLB+ASG+RDS)/`  
 
 **Description:**  
 A web tier in private subnets behind an internet-facing Network Load Balancer (NLB), revised on 2026-10-07 to serve traffic over HTTPS and to add a Multi-AZ RDS for PostgreSQL 18 database tier (one primary plus a synchronous standby). The revised Terraform gives the NLB a single `TLS:443` listener for `webapp-nlb.aterpise.com`, with an ACM certificate validated through Terraform-managed Cloudflare DNS records; port 80 is closed (no listener and no security group rule), because an NLB can forward but cannot redirect. Nginx or Apache instances on Amazon Linux 2023 in an Auto Scaling Group run a boot-time connectivity check against the database and show `connected` or `unreachable` on a static page. The previous architecture (HTTP only, no database tier) was deployed in June 2026; the HTTPS and RDS revision is authored and validate-clean, not deployed.
@@ -138,13 +138,13 @@ A web tier in private subnets behind an internet-facing Network Load Balancer (N
 **Performance:** Sub-millisecond latency, 1M+ RPS capacity
 
 **Links:**
-- 📄 [Full Documentation](Scalable%20Web%20App%20with%20NLB%20%26%20Auto%20Scaling/README.md)
+- 📄 [Full Documentation](Scalable%20Web%20App%20%28NLB%2BASG%2BRDS%29/README.md)
 
 ---
 
-### 5. Cloud-Tibot
+### 5. Cloud-Tibot (Lambda+API Gateway+DynamoDB)
 
-**Location:** `./Cloud-Tibot/`  
+**Location:** `./Cloud-Tibot (Lambda+API Gateway+DynamoDB)/`  
 
 **Description:**  
 A microservices-based platform for deploying and managing AI agents/bots with event-driven architecture. Demonstrates serverless patterns, Lambda integration, and scalable bot deployment.
@@ -164,13 +164,13 @@ A microservices-based platform for deploying and managing AI agents/bots with ev
 **Cost:** Variable (pay-as-you-go serverless model)
 
 **Links:**
-- 📄 [Full Documentation](Cloud-Tibot/README.md)
+- 📄 [Full Documentation](Cloud-Tibot%20%28Lambda%2BAPI%20Gateway%2BDynamoDB%29/README.md)
 
 ---
 
-### 7. YRC2026 Event Ticket Check-In System
+### 7. Event Ticket Check-In System (API Gateway+SQS+Lambda)
 
-**Location:** `./Event Ticket Check In System/`
+**Location:** `./Event Ticket Check In System (API Gateway+SQS+Lambda)/`
 
 **Description:**
 A production-deployed serverless event management system built on AWS for Youth Revival Conference 2026, handling the complete attendee lifecycle: Google Form registration → automated QR code ticket delivery via Gmail API → staff check-in via Google Spreadsheet. Uses an event-driven pipeline (API Gateway → SQS FIFO → Lambda) with usage-limited DynamoDB token authentication, S3 OAuth token persistence, and a hot-swappable email template. Infrastructure fully managed by Terraform across 9 files.
@@ -193,13 +193,13 @@ A production-deployed serverless event management system built on AWS for Youth 
 **Testing:** 8 architecture validation checks across all deployed components
 
 **Links:**
-- 📄 [Full Documentation](Event%20Ticket%20Check%20In%20System/README.md)
+- 📄 [Full Documentation](Event%20Ticket%20Check%20In%20System%20%28API%20Gateway%2BSQS%2BLambda%29/README.md)
 
 ---
 
-### 13. Systems Manager Automated Patching
+### 13. Systems Manager Automated Patching (SSM+EC2+SNS)
 
-**Location:** `./Systems Manager Automated Patching/`
+**Location:** `./Systems Manager Automated Patching (SSM+EC2+SNS)/`
 
 **Description:**
 An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22.04 fleet, built entirely on AWS Systems Manager and Terraform for a healthcare revenue-cycle workload (Meridian Health Partners) under a Critical-CVE ≤ 7-day VM-SLA. Stands up a self-contained VPC, SSM-managed EC2 targets, per-OS Patch Baselines, staggered weekly Maintenance Windows, and `AWS-RunPatchBaseline` Run Command tasks that install approved patches in bounded waves, with SNS alerting on failure.
@@ -222,12 +222,12 @@ An automated OS-patching control plane for a mixed Amazon Linux 2023 / Ubuntu 22
 **Status:** Authored & `terraform validate`-clean; not yet deployed
 
 **Links:**
-- 📄 [Full Documentation](Systems%20Manager%20Automated%20Patching/README.md)
+- 📄 [Full Documentation](Systems%20Manager%20Automated%20Patching%20%28SSM%2BEC2%2BSNS%29/README.md)
 - 📝 [Resume Summary](Resume/13_Systems_Manager_Automated_Patching.md)
 
 ---
 
-### 16. Icebreaker Poll Game — Human vs AI Live Audience Poll
+### 16. Icebreaker Poll Game (ECS+Fargate+ALB)
 
 **Location:** `./Icebreaker Poll Game (ECS+Fargate+ALB)/` (separate repository — [Aterpise-MY/Icebreaker-Poll-Game](https://github.com/Aterpise-MY/Icebreaker-Poll-Game), branch `master`)
 
@@ -294,7 +294,7 @@ A retail POS transaction pipeline built around one requirement: **no transaction
 
 ---
 
-### 18. Love Opinion Poll Game — Live Opinion Poll on EKS Fargate
+### 18. Love Opinion Poll Game (EKS+Fargate+ALB)
 
 **Location:** `./Love Opinion Poll Game (EKS+Fargate+ALB)/` (separate repository — [Aterpise-MY/Love-Opinion-Poll-Game](https://github.com/Aterpise-MY/Love-Opinion-Poll-Game), branch `master`)
 
@@ -465,7 +465,7 @@ AWS Project/                                    # Root portfolio directory
 │   ├── scripts/
 │   └── test-*.sh
 │
-├── Scalable Web App with ALB & Auto Scaling/ # Project 3: ALB Architecture
+├── Scalable Web App (ALB+ASG+RDS)/           # Project 3: ALB Architecture
 │   ├── README.md                             # Full documentation
 │   ├── Result.md                             # Deployment result from June 2026 (previous architecture)
 │   ├── main.tf                               # Providers, DB subnets, security groups, IAM, ACM + Cloudflare DNS, RDS, ALB, ASG, alarms
@@ -479,7 +479,7 @@ AWS Project/                                    # Root portfolio directory
 │   │   └── .gitignore                        # Excludes generated reports and outputs
 │   └── screenshots/                          # Screenshots from the June 2026 deployment
 │
-├── Scalable Web App with NLB & Auto Scaling/ # Project 4: NLB Architecture
+├── Scalable Web App (NLB+ASG+RDS)/           # Project 4: NLB Architecture
 │   ├── README.md                             # Full documentation
 │   ├── Result.md                             # Deployment result from June 2026 (previous architecture)
 │   ├── provider.tf                           # Terraform, AWS, random and Cloudflare provider constraints
@@ -493,12 +493,12 @@ AWS Project/                                    # Root portfolio directory
 │   │   └── .gitignore                        # Excludes generated reports and outputs
 │   └── screenshots/                          # Screenshots from the June 2026 deployment
 │
-├── Cloud-Tibot/                              # Project 5: Microservices
+├── Cloud-Tibot (Lambda+API Gateway+DynamoDB)/ # Project 5: Microservices
 │   ├── README.md
 │   ├── terraform/
 │   └── scripts/
 │
-├── Event Ticket Check In System/             # Project 7: Serverless Event Ticketing
+├── Event Ticket Check In System (API Gateway+SQS+Lambda)/ # Project 7: Serverless Event Ticketing
 │   ├── README.md                            # Full documentation (16 sections)
 │   └── terraform/
 │       ├── provider.tf                      # AWS provider + version constraints
@@ -511,7 +511,7 @@ AWS Project/                                    # Root portfolio directory
 │       ├── api_gateway.tf                   # REST API, stage, API key, usage plan
 │       └── outputs.tf                       # 12 outputs (URLs, names, ARNs)
 │
-├── Systems Manager Automated Patching/       # Project 13: SSM Patch Manager
+├── Systems Manager Automated Patching (SSM+EC2+SNS)/ # Project 13: SSM Patch Manager
 │   ├── README.md                            # Full documentation (14 sections)
 │   ├── main.tf                              # VPC, IAM, SG, EC2 targets, baselines, windows, tasks, SNS
 │   ├── variables.tf                         # Inputs with validation (patch_groups, schedules)
@@ -645,14 +645,14 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Project | Monthly Cost | Primary Driver | Optimization |
 |---------|-------------|-----------------|---------------|
 | Multi-Tier Web App | ~$280 | EC2 (70%) | Spot instances, reserved capacity |
-| Scalable Web App (ALB) | $123.25 (idle baseline; HTTPS + RDS revision, not deployed) | EC2 2 × `t3.medium` ($60.74) + RDS Multi-AZ ($26.28) | Scheduled scaling, spot instances |
-| Scalable Web App (NLB) | $196.25 (idle baseline; HTTPS + RDS revision, not deployed) | NAT gateways × 2 ($65.70) + EC2 2 × `t3.medium` ($60.74) | Auto-scaling, scheduled downtime |
-| Cloud-Tibot | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
-| Event Ticket Check-In | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
-| Systems Manager Automated Patching* | ~$24/month | EC2 (2 × t3.micro) + public IPv4 | SSM/Maintenance Windows free; stop instances between windows; $0 while destroyed |
-| Icebreaker Poll Game | ~$92/month 24/7; ~$10/event | Fargate 2 × (1 vCPU / 2 GB) ARM ~$72 + ALB ~$18 | No NAT Gateway by design; scale the ECS service to zero between events; `teardown.sh` → $0 |
+| Scalable Web App (ALB+ASG+RDS) | $123.25 (idle baseline; HTTPS + RDS revision, not deployed) | EC2 2 × `t3.medium` ($60.74) + RDS Multi-AZ ($26.28) | Scheduled scaling, spot instances |
+| Scalable Web App (NLB+ASG+RDS) | $196.25 (idle baseline; HTTPS + RDS revision, not deployed) | NAT gateways × 2 ($65.70) + EC2 2 × `t3.medium` ($60.74) | Auto-scaling, scheduled downtime |
+| Cloud-Tibot (Lambda+API Gateway+DynamoDB) | Variable | Lambda + API (serverless) | Cost-efficient pay-per-use |
+| Event Ticket Check-In System (API Gateway+SQS+Lambda) | ~$0.30/event | Lambda (GmailSender, 2048 MB) | Event-triggered; near-zero cost between events |
+| Systems Manager Automated Patching (SSM+EC2+SNS)* | ~$24/month | EC2 (2 × t3.micro) + public IPv4 | SSM/Maintenance Windows free; stop instances between windows; $0 while destroyed |
+| Icebreaker Poll Game (ECS+Fargate+ALB) | ~$92/month 24/7; ~$10/event | Fargate 2 × (1 vCPU / 2 GB) ARM ~$72 + ALB ~$18 | No NAT Gateway by design; scale the ECS service to zero between events; `teardown.sh` → $0 |
 | POS Transaction Pipeline with SQS DLQ* | ~$0.70/month | 7 CloudWatch alarms (~$0.10 each) — everything else Free Tier at lab volume | SSE-SQS instead of a customer-managed KMS key (−~$1/key); on-demand DynamoDB + Lambda cost nothing idle; $0 while destroyed |
-| Love Opinion Poll Game (EKS Fargate) | ~$280/month 24/7; ~$9.22/day | Fargate 6 pods ~$135 + EKS control plane $73 + NAT Gateway ~$43 + ALB ~$18 | Single-event stack: destroy after the show (destroyed 2026-10-11, $0 today); one shared NAT Gateway; the optional real-time tier (+~$163/month) is off by default |
+| Love Opinion Poll Game (EKS+Fargate+ALB) | ~$280/month 24/7; ~$9.22/day | Fargate 6 pods ~$135 + EKS control plane $73 + NAT Gateway ~$43 + ALB ~$18 | Single-event stack: destroy after the show (destroyed 2026-10-11, $0 today); one shared NAT Gateway; the optional real-time tier (+~$163/month) is off by default |
 
 > *Authored & `terraform validate`-clean; not currently deployed, so it bills $0 today.
 
@@ -667,14 +667,14 @@ All projects follow **AWS Well-Architected Framework** principles:
 | Project | Quick Tests | Comprehensive | Critical | Custom |
 |---------|------------|---|---|---|
 | Multi-Tier Web App | ✅ 5 tests | ✅ 15 tests | ✅ 8 tests | ✅ Load Test |
-| Scalable Web App (ALB) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Failover |
-| Scalable Web App (NLB) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Throughput |
-| Cloud-Tibot | ✅ 3 tests | ✅ 10 tests | ✅ 6 tests | ✅ Event Flow |
-| Event Ticket Check-In | ✅ 8 tests | — | — | ✅ End-to-end delivery |
-| Systems Manager Automated Patching | ✅ `validate`-clean | — | — | ⏳ Live patch run pending deploy |
-| Icebreaker Poll Game | ✅ 139 unit tests (`node --test`) | ⚠️ 19-check smoke suite — 17 pass, 2 assert a superseded `tally: null` contract | ✅ 5-job CI (answer key, backend, frontend build, lint, image) | ✅ 300-player load test on the deployed stack |
+| Scalable Web App (ALB+ASG+RDS) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Failover |
+| Scalable Web App (NLB+ASG+RDS) | ✅ 4 tests | ✅ 12 tests | ✅ 7 tests | ✅ Throughput |
+| Cloud-Tibot (Lambda+API Gateway+DynamoDB) | ✅ 3 tests | ✅ 10 tests | ✅ 6 tests | ✅ Event Flow |
+| Event Ticket Check-In System (API Gateway+SQS+Lambda) | ✅ 8 tests | — | — | ✅ End-to-end delivery |
+| Systems Manager Automated Patching (SSM+EC2+SNS) | ✅ `validate`-clean | — | — | ⏳ Live patch run pending deploy |
+| Icebreaker Poll Game (ECS+Fargate+ALB) | ✅ 139 unit tests (`node --test`) | ⚠️ 19-check smoke suite — 17 pass, 2 assert a superseded `tally: null` contract | ✅ 5-job CI (answer key, backend, frontend build, lint, image) | ✅ 300-player load test on the deployed stack |
 | POS Transaction Pipeline with SQS DLQ | ✅ `fmt` + `validate`-clean (`Plan: 48 to add`) | ✅ 23 offline unit tests (`python3 -m unittest discover lambda`) | ✅ TC-01 to TC-05 covered offline (poison, partial batch, idempotency, outage drill) | ⏳ Live DLQ drill, redrive (TC-06), SNS delivery DLQ (TC-07) and Logs Insights traceability (TC-08) pending deploy |
-| Love Opinion Poll Game | 160 unit tests (`node --test`: 153 backend + 7 frontend, recorded passing at commit `b18f00d`) | 34-check smoke suite (`scripts/smoke.sh`) — no run against the deployed stack is recorded | 6-job CI (answer key, backend, frontend build, lint, terraform, image) | k6 load test: not recorded — no k6 script or output exists in the repository |
+| Love Opinion Poll Game (EKS+Fargate+ALB) | 160 unit tests (`node --test`: 153 backend + 7 frontend, recorded passing at commit `b18f00d`) | 34-check smoke suite (`scripts/smoke.sh`) — no run against the deployed stack is recorded | 6-job CI (answer key, backend, frontend build, lint, terraform, image) | k6 load test: not recorded — no k6 script or output exists in the repository |
 
 ---
 

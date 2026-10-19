@@ -1,4 +1,4 @@
-# Scalable Web Application — AWS ALB & Auto Scaling
+# Scalable Web App (ALB+ASG+RDS)
 
 An infrastructure-as-code project that deploys a horizontally scalable web
 application on AWS using Terraform. Clients reach an Application Load Balancer
@@ -540,7 +540,7 @@ You also need:
 
 ```bash
 # 1. Clone / enter the project directory
-cd "Scalable Web App with ALB & Auto Scaling"
+cd "Scalable Web App (ALB+ASG+RDS)"
 
 # 2. Create your variable file from the example and fill in your real values
 #    Required: vpc_id, subnet_ids, public_route_table_id, domain_name, cloudflare_zone_id

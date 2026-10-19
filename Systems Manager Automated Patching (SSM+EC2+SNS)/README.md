@@ -1,4 +1,4 @@
-# Systems Manager Automated Patching
+# Systems Manager Automated Patching (SSM+EC2+SNS)
 
 Automate OS patching across a mixed Amazon Linux 2023 / Ubuntu 22.04 fleet with AWS Systems Manager. This Terraform configuration provisions a self-contained VPC, SSM-managed demo EC2 targets, per-OS **Patch Baselines**, staggered weekly **Maintenance Windows**, and `AWS-RunPatchBaseline` Run Command tasks that install approved patches unattended. Instances are grouped by the reserved `Patch Group` tag, patched in controlled waves (`max_concurrency` / `max_errors`), and task failures are pushed to an SNS topic for on-call alerting. The design targets a healthcare revenue-cycle workload (Meridian Health Partners) where a Critical CVE must be remediated within a 7-day VM-SLA under SOC 2 / HIPAA / PCI-DSS 6.3.3 controls.
 
@@ -235,7 +235,7 @@ Targets register instances by the `Patch Group` tag; tasks run `AWS-RunPatchBase
 ## Directory Structure
 
 ```
-Systems Manager Automated Patching/
+Systems Manager Automated Patching (SSM+EC2+SNS)/
 ├── main.tf                    # VPC, IAM, SG, EC2 targets, baselines, windows, tasks, SNS
 ├── variables.tf               # Input variables with validation (instance_count, patch_groups, schedules)
 ├── outputs.tf                 # VPC/instance IDs, role ARNs, baseline & window IDs, compliance query hint
@@ -264,7 +264,7 @@ Account-level requirements:
 
 ```bash
 # 1. Enter the project directory
-cd "Systems Manager Automated Patching"
+cd "Systems Manager Automated Patching (SSM+EC2+SNS)"
 
 # 2. Copy and (optionally) edit the variables file
 cp terraform.tfvars.example terraform.tfvars
