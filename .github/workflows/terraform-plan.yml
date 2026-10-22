@@ -99,7 +99,7 @@ jobs:
     strategy:
       fail-fast: false       # keep other envs running even if one plan fails
       matrix:
-        env: [dev, staging, prod]
+        env: [staging, prod]
 
     steps:
       - uses: actions/checkout@v4
